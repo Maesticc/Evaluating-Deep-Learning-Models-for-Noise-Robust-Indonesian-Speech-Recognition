@@ -1,0 +1,17 @@
+# Minimum versions. Pin exact versions after the environment has been tested
+# (pip freeze > requirements-lock.txt) and record CUDA/GPU details in the README.
+# Install PyTorch for your CUDA version first: https://pytorch.org/get-started/locally/
+torch>=2.3
+torchaudio>=2.3
+transformers>=4.44
+huggingface_hub>=0.24
+accelerate>=0.33
+soundfile>=0.12
+librosa>=0.10
+numpy>=1.26
+pandas>=2.1
+pyyaml>=6.0
+jiwer>=3.0
+matplotlib>=3.8
+seaborn>=0.13
+jupyter>=1.0

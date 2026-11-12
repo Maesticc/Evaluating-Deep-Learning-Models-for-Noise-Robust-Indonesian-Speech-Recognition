@@ -1,0 +1,137 @@
+# Experiment configuration for the Indonesian ASR noise-robustness study.
+# All paths are relative to the repository root.
+# Freeze this file (and commit it) before running the full evaluation.
+
+project:
+  name: indonesian-asr-noise-robustness
+  seed: 42
+
+paths:
+  speech_root: data/raw/indonesia_asr          # Hugging Face dataset snapshot + extracted audio
+  speech_metadata: data/raw/indonesia_asr/metadata/dataset_metadata_public.csv
+  speech_split_assignment: data/raw/indonesia_asr/splits/speaker_split_assignment_public.csv
+  noise_root: data/raw/ms_snsd                 # sparse clone of microsoft/MS-SNSD
+  manifests_dir: data/processed/manifests
+  pilot_cache_dir: data/processed/pilot_cache
+  models_dir: output/models
+  logs_dir: output/logs
+  predictions_dir: output/predictions
+  plots_dir: output/plots
+
+datasets:
+  speech:
+    hf_repo_id: Atika88/Indonesian-ASR-11-Class-Dataset
+    # "main" is the latest revision. The DOI-registered revision is
+    # c65fe8bcff0547214c34cfbea248b4045a0d867c (may use "dev" instead of "val").
+    # The resolved commit hash is written to data/raw/indonesia_asr/DOWNLOAD_INFO.json.
+    revision: main
+  noise:
+    git_url: https://github.com/microsoft/MS-SNSD.git
+    pools: [noise_train, noise_test]
+
+audio:
+  target_sample_rate: 16000
+  convert_to_mono: true          # all three models expect mono input
+
+speech_audit:
+  # Leave duration thresholds null until the duration distribution has been inspected
+  # (python -m src.audio_validation --target speech prints a summary).
+  min_duration_sec: null
+  max_duration_sec: null
+  silence_rms_dbfs: -50.0        # whole-file RMS below this -> review (never auto-reject)
+  clipping_peak: 0.999           # |sample| >= this counts as clipped
+  clipping_fraction_review: 0.001  # fraction of clipped samples that triggers review
+  metadata_duration_tolerance_sec: 0.05
+  exclude_synthetic: true        # synthetic repair files are excluded from the primary evaluation
+  num_workers: 4
+
+noise_audit:
+  # Categories whose recordings contain speech/babble: excluded from the primary experiment.
+  speech_like_categories: [Babble, NeighborSpeaking, AirportAnnouncements]
+  # Categories that may contain background talk: require manual listening before use.
+  review_categories: [Cafe, CafeTeria, Restaurant, Station, Metro, Square, Office, Hallway]
+  include_music: false
+  # Normalise inconsistent MS-SNSD filename prefixes.
+  category_aliases:
+    AirportAnnouncement: AirportAnnouncements
+  silence_rms_dbfs: -60.0
+  num_workers: 4
+
+text_normalization:
+  lowercase: true
+  strip_accents: true
+  hyphen_to_space: true          # "anak-anak" -> "anak anak" for both reference and hypothesis
+  remove_punctuation: true
+  numbers_to_words: true         # "2018" -> "dua ribu delapan belas"
+  percent_to_word: true          # "%" -> "persen"
+
+mixing:
+  snr_db: [20, 10, 5, 0]
+  eval_noise_pool: noise_test    # noise files used for evaluation
+  augmentation_noise_pool: noise_train  # reserved for the optional secondary experiment
+  power_method: active_speech    # active_speech | full
+  active_frame_ms: 25
+  active_hop_ms: 10
+  active_threshold_db: 40.0      # frames within this many dB of the loudest frame count as active
+  noise_assignment: round_robin_category  # balance noise categories across utterances
+  realizations_per_utterance: 1
+  on_clipping: scale_both        # scale_both (keeps SNR, records gain) | flag
+  clip_peak: 0.999
+  snr_tolerance_db: 0.1          # achieved SNR must be within this of the target
+
+pilot:
+  split: test
+  n_utterances: 30
+
+models:
+  custom_cnn_bilstm_ctc:
+    features:                    # log-Mel filterbank, frozen for all runs
+      sample_rate: 16000
+      n_fft: 400                 # 25 ms window
+      win_length: 400
+      hop_length: 160            # 10 ms hop
+      n_mels: 80
+      log_offset: 1.0e-6
+      per_utterance_norm: true
+    architecture:
+      cnn_channels: [32, 32]
+      lstm_hidden: 256
+      lstm_layers: 3
+      dropout: 0.2
+    training:
+      batch_size: 16
+      learning_rate: 5.0e-4
+      weight_decay: 1.0e-5
+      max_epochs: 50
+      early_stopping_patience: 5
+      grad_clip: 5.0
+      selection_metric: cer       # val metric used to select the checkpoint
+      max_train_duration_sec: 30  # long training files are skipped (training split only)
+      max_train_utterances: null  # set an integer for quick experiments
+      max_val_utterances: 2000    # fixed-seed subset of val used each epoch
+      num_workers: 2
+      amp: true
+    checkpoint: output/models/custom_cnn_bilstm_ctc/best.pt
+    batch_size: 16               # inference batch size
+
+  wav2vec2:
+    checkpoint: indonesian-nlp/wav2vec2-large-xlsr-indonesian
+    batch_size: 8
+    fp16: false
+
+  whisper:
+    checkpoint: openai/whisper-large-v3
+    language: indonesian
+    task: transcribe
+    num_beams: 1
+    max_new_tokens: 225
+    batch_size: 4
+    fp16: true                   # only applied on CUDA
+
+inference:
+  warmup_batches: 1              # excluded from timing
+  device: auto                   # auto | cuda | cpu
+
+evaluation:
+  bootstrap_resamples: 1000
+  confidence_level: 0.95

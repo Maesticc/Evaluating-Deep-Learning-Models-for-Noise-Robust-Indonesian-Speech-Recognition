@@ -1,0 +1,129 @@
+"""Load the three ASR systems behind one interface: `transcribe(list[np.ndarray]) -> list[str]`.
+
+Each pretrained checkpoint uses its own official processor/tokenizer; no shared feature
+extraction is forced across models. MFCCs are not used anywhere in these input paths.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+from src.custom_cnn_bilstm_ctc import load_checkpoint, pad_batch
+from src.utils import project_path
+
+MODEL_NAMES = ("custom_cnn_bilstm_ctc", "wav2vec2", "whisper")
+WHISPER_MAX_SEC = 30.0
+
+
+class ASRModel:
+    name: str
+    sample_rate: int = 16000
+
+    def transcribe(self, waves: list[np.ndarray]) -> list[str]:
+        raise NotImplementedError
+
+    def describe(self) -> dict:
+        return {"name": self.name}
+
+
+class CustomModel(ASRModel):
+    name = "custom_cnn_bilstm_ctc"
+
+    def __init__(self, cfg: dict, device: str):
+        self.mcfg = cfg["models"][self.name]
+        self.device = device
+        self.checkpoint = project_path(self.mcfg["checkpoint"])
+        if not self.checkpoint.exists():
+            raise FileNotFoundError(f"{self.checkpoint} not found. Train it with: python -m src.train_custom_model")
+        self.model = load_checkpoint(self.checkpoint, device)
+        self.sample_rate = self.mcfg["features"]["sample_rate"]
+
+    @torch.no_grad()
+    def transcribe(self, waves):
+        wave, lengths = pad_batch(waves, self.device)
+        log_probs, out_lengths = self.model(wave, lengths)
+        return self.model.greedy_decode(log_probs, out_lengths)
+
+    def describe(self):
+        return {"name": self.name, "checkpoint": str(self.checkpoint), "decoding": "ctc_greedy",
+                "features": self.mcfg["features"], "architecture": self.mcfg["architecture"]}
+
+
+class Wav2Vec2Model(ASRModel):
+    name = "wav2vec2"
+
+    def __init__(self, cfg: dict, device: str):
+        from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+
+        self.mcfg = cfg["models"][self.name]
+        self.device = device
+        self.dtype = torch.float16 if (self.mcfg.get("fp16") and device == "cuda") else torch.float32
+        self.processor = Wav2Vec2Processor.from_pretrained(self.mcfg["checkpoint"])
+        self.model = Wav2Vec2ForCTC.from_pretrained(self.mcfg["checkpoint"], torch_dtype=self.dtype).to(device).eval()
+        self.sample_rate = self.processor.feature_extractor.sampling_rate
+
+    @torch.no_grad()
+    def transcribe(self, waves):
+        inputs = self.processor(waves, sampling_rate=self.sample_rate, return_tensors="pt", padding=True)
+        kwargs = {"input_values": inputs.input_values.to(self.device, self.dtype)}
+        if "attention_mask" in inputs:
+            kwargs["attention_mask"] = inputs.attention_mask.to(self.device)
+        logits = self.model(**kwargs).logits
+        return self.processor.batch_decode(logits.argmax(dim=-1))
+
+    def describe(self):
+        return {"name": self.name, "checkpoint": self.mcfg["checkpoint"], "decoding": "ctc_greedy",
+                "dtype": str(self.dtype), "sample_rate": self.sample_rate,
+                "return_attention_mask": self.processor.feature_extractor.return_attention_mask}
+
+
+class WhisperModel(ASRModel):
+    name = "whisper"
+
+    def __init__(self, cfg: dict, device: str):
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+        self.mcfg = cfg["models"][self.name]
+        self.device = device
+        self.dtype = torch.float16 if (self.mcfg.get("fp16") and device == "cuda") else torch.float32
+        self.processor = WhisperProcessor.from_pretrained(self.mcfg["checkpoint"])
+        self.model = WhisperForConditionalGeneration.from_pretrained(
+            self.mcfg["checkpoint"], torch_dtype=self.dtype).to(device).eval()
+        self.sample_rate = self.processor.feature_extractor.sampling_rate
+        self.gen_kwargs = {"language": self.mcfg["language"], "task": self.mcfg["task"],
+                           "num_beams": self.mcfg["num_beams"], "max_new_tokens": self.mcfg["max_new_tokens"]}
+
+    def _generate(self, inputs, long_form: bool) -> list[str]:
+        kwargs = dict(self.gen_kwargs)
+        if long_form:  # sequential long-form decoding for audio > 30 s
+            kwargs.update({"attention_mask": inputs.attention_mask.to(self.device), "return_timestamps": True})
+            kwargs.pop("max_new_tokens")
+        ids = self.model.generate(inputs.input_features.to(self.device, self.dtype), **kwargs)
+        return self.processor.batch_decode(ids, skip_special_tokens=True)
+
+    @torch.no_grad()
+    def transcribe(self, waves):
+        out: list[str | None] = [None] * len(waves)
+        short = [i for i, w in enumerate(waves) if len(w) / self.sample_rate <= WHISPER_MAX_SEC]
+        if short:
+            inputs = self.processor([waves[i] for i in short], sampling_rate=self.sample_rate, return_tensors="pt")
+            for i, text in zip(short, self._generate(inputs, long_form=False)):
+                out[i] = text
+        for i in (i for i in range(len(waves)) if out[i] is None):
+            inputs = self.processor(waves[i], sampling_rate=self.sample_rate, return_tensors="pt",
+                                    truncation=False, padding="longest", return_attention_mask=True)
+            out[i] = self._generate(inputs, long_form=True)[0]
+        return [t.strip() for t in out]
+
+    def describe(self):
+        return {"name": self.name, "checkpoint": self.mcfg["checkpoint"], "dtype": str(self.dtype),
+                "generation": self.gen_kwargs, "sample_rate": self.sample_rate,
+                "long_form": f"sequential with timestamps for audio > {WHISPER_MAX_SEC:.0f} s"}
+
+
+def load_model(name: str, cfg: dict, device: str) -> ASRModel:
+    classes = {"custom_cnn_bilstm_ctc": CustomModel, "wav2vec2": Wav2Vec2Model, "whisper": WhisperModel}
+    if name not in classes:
+        raise ValueError(f"Unknown model '{name}'. Choose from {MODEL_NAMES}")
+    return classes[name](cfg, device)
