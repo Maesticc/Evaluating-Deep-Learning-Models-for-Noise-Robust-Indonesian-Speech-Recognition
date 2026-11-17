@@ -54,6 +54,7 @@ noise_audit:
   # Normalise inconsistent MS-SNSD filename prefixes.
   category_aliases:
     AirportAnnouncement: AirportAnnouncements
+    Neighbor: NeighborSpeaking   # noise_test uses "Neighbor_*.wav" for the same speech-like category
   silence_rms_dbfs: -60.0
   num_workers: 4
 

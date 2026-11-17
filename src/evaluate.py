@@ -84,13 +84,36 @@ def summarize(scored: pd.DataFrame, keys: list[str], cfg: dict, with_ci: bool = 
     return pd.DataFrame(rows)
 
 
-def add_degradation(table: pd.DataFrame, clean: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
-    ref = clean.set_index("model")[["wer", "cer"]].rename(columns={"wer": "wer_clean", "cer": "cer_clean"})
-    t = table.join(ref, on="model")
+def add_degradation(table: pd.DataFrame, clean: pd.DataFrame, on: list[str]) -> pd.DataFrame:
+    """Join the clean WER/CER of the *same utterances* (matched on `on`) and compute degradation.
+
+    Relative degradation is undefined when the clean WER is 0: it is set to NaN and flagged in
+    `rel_wer_undefined` instead of producing inf. Absolute degradation is still reported.
+    """
+    ref = clean.set_index(on)[["wer", "cer"]].rename(columns={"wer": "wer_clean", "cer": "cer_clean"})
+    t = table.join(ref, on=on)
     t["abs_wer_degradation"] = t["wer"] - t["wer_clean"]
-    t["rel_wer_degradation"] = (t["wer"] - t["wer_clean"]) / t["wer_clean"] * 100
+    t["rel_wer_undefined"] = t["wer_clean"] == 0
+    t["rel_wer_degradation"] = np.where(t["rel_wer_undefined"], np.nan,
+                                        t["abs_wer_degradation"] / t["wer_clean"].replace(0, np.nan) * 100)
     t["abs_cer_degradation"] = t["cer"] - t["cer_clean"]
+    if t["rel_wer_undefined"].any():
+        log.warning("Clean WER is 0 for %d rows; relative WER degradation set to NaN (see rel_wer_undefined)",
+                    int(t["rel_wer_undefined"].sum()))
     return t
+
+
+def clean_by_noise_category(scored: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Clean WER/CER of the utterances that were paired with each noise category.
+
+    Each utterance is mixed with one category, so categories cover different utterances. The
+    per-category degradation must use the clean score of those same utterances, not the overall one.
+    """
+    pairing = (scored.loc[scored["condition"] != "clean", ["model", "utt_id", "noise_category"]]
+               .drop_duplicates())
+    clean_rows = (scored[scored["condition"] == "clean"].drop(columns="noise_category")
+                  .merge(pairing, on=["model", "utt_id"]))
+    return summarize(clean_rows, ["model", "noise_category"], cfg, with_ci=False)
 
 
 def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir) -> None:
@@ -166,7 +189,7 @@ def evaluate(cfg: dict, tag: str) -> None:
     scored = score_predictions(pred, cfg)
     by_cond = summarize(scored, ["model", "condition"], cfg)
     clean = by_cond[by_cond["condition"] == "clean"]
-    by_cond = add_degradation(by_cond, clean, ["model", "condition"])
+    by_cond = add_degradation(by_cond, clean, ["model"])
     by_cond["condition"] = pd.Categorical(by_cond["condition"], CONDITION_ORDER, ordered=True)
     by_cond = by_cond.sort_values(["model", "condition"]).reset_index(drop=True)
     by_cond["condition"] = by_cond["condition"].astype(str)
@@ -174,7 +197,7 @@ def evaluate(cfg: dict, tag: str) -> None:
     by_cat = summarize(scored[scored["condition"] != "clean"], ["model", "noise_category", "condition"], cfg,
                        with_ci=False)
     if not by_cat.empty:
-        by_cat = add_degradation(by_cat, clean, ["model", "noise_category", "condition"])
+        by_cat = add_degradation(by_cat, clean_by_noise_category(scored, cfg), ["model", "noise_category"])
 
     rank = by_cond.pivot(index="condition", columns="model", values="wer").rank(axis=1).astype(int)
     rtfx = summarize(scored, ["model"], cfg, with_ci=False)[["model", "audio_sec", "inference_sec", "rtfx"]]
