@@ -43,6 +43,20 @@ speech_audit:
   # audio/transcript mismatch; very fast rates suggest truncated audio.
   min_chars_per_sec: 5.0
   max_chars_per_sec: 30.0
+  # Rule-based resolution of "review" files (replaces per-file listening for these flags).
+  # Manual decisions in manual_review_decisions.csv still override these rules.
+  auto_review:
+    enabled: true
+    # Clipping was found mild and concentrated in a few loud recording sessions
+    # (median 0.25% clipped samples). Below this fraction the file is accepted.
+    max_clipped_fraction: 0.01
+    # Duration / speaking-rate flags: speaking rate is recomputed over the active-speech span
+    # (first to last frame within active_threshold_db of the loudest frame), so leading and
+    # trailing silence no longer counts. Outside this range -> invalid
+    # (too slow: extra or wrong content; too fast: truncated audio).
+    active_threshold_db: 30.0
+    min_active_chars_per_sec: 3.0
+    max_active_chars_per_sec: 30.0
   silence_rms_dbfs: -50.0        # whole-file RMS below this -> review (never auto-reject)
   clipping_peak: 0.999           # |sample| >= this counts as clipped
   clipping_fraction_review: 0.001  # fraction of clipped samples that triggers review
@@ -82,6 +96,9 @@ mixing:
   noise_assignment: round_robin_category  # balance noise categories across utterances
   realizations_per_utterance: 1
   on_clipping: scale_both        # scale_both (keeps SNR, records gain) | flag
+  # utterance: one gain for all conditions of an utterance (clean included), taken from its
+  # loudest mixture, so the speech level is identical across conditions | condition: per mixture
+  gain_scope: utterance
   clip_peak: 0.999
   snr_tolerance_db: 0.1          # achieved SNR must be within this of the target
 

@@ -1,7 +1,8 @@
 """Audit speech and noise files and assign valid / review / invalid status.
 
-Automatic checks only *flag* questionable files. Ambiguous cases go to "review" and are
-resolved by listening; decisions are recorded in a CSV so the filtering stays auditable:
+Automatic checks only *flag* questionable files (`audit_flags`). Speech files in "review" are
+resolved by documented rules (`speech_audit.auto_review`). `exclusion_reason` is filled only
+for files that end up not valid. Manual decisions override the rules and stay auditable:
 
     data/processed/manifests/manual_review_decisions.csv
     columns: manifest (speech|noise), id (utt_id|noise_id), decision (valid|invalid), note
@@ -14,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -76,18 +78,87 @@ def _apply_manual_decisions(df: pd.DataFrame, manifest: str, id_col: str, cfg: d
             continue
         df.loc[mask, "quality_status"] = row["decision"]
         df.loc[mask, "manual_decision"] = f"{row['decision']}: {row['note']}"
+        df.loc[mask, "exclusion_reason"] = "manual_review" if row["decision"] == "invalid" else ""
     log.info("Applied %d manual %s decisions", len(dec), manifest)
     return df
 
 
-def _assign(df: pd.DataFrame, mask: pd.Series, status: str, reason: str) -> None:
-    """Flag rows; 'invalid' overrides 'review', which overrides 'valid'. Reasons accumulate."""
+RATE_REASONS = {"too_short", "too_long", "speaking_rate_too_slow", "speaking_rate_too_fast"}
+
+
+def _auto_review_speech(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Resolve "review" files with documented rules instead of per-file listening.
+
+    Only clipping and duration/speaking-rate flags are resolved. Files with any other flag
+    stay in review. The rule and the measured values are written to `auto_review`.
+    """
+    from src.noise_mixing import active_speech_mask
+
+    r = cfg["speech_audit"].get("auto_review") or {}
+    if not r.get("enabled"):
+        return df
+    mcfg = cfg["mixing"]
+    root = project_path(cfg["paths"]["speech_root"])
+    df["auto_review"] = ""
+    for idx in df.index[df["quality_status"] == "review"]:
+        reasons = set(df.at[idx, "audit_flags"].split(";"))
+        if reasons - RATE_REASONS - {"possible_clipping"}:
+            continue
+        decision, notes, causes = "valid", [], []
+        if "possible_clipping" in reasons:
+            frac = float(df.at[idx, "clipped_fraction"])
+            if frac >= r["max_clipped_fraction"]:
+                decision = "invalid"
+                causes.append("clipping_above_limit")
+            notes.append(f"clipped {frac:.2%} (limit {r['max_clipped_fraction']:.0%})")
+        if reasons & RATE_REASONS:
+            audio, sr = sf.read(str(root / df.at[idx, "audio_path"]), dtype="float32", always_2d=True)
+            mask = active_speech_mask(audio.mean(axis=1), sr, mcfg["active_frame_ms"], mcfg["active_hop_ms"],
+                                      r["active_threshold_db"])
+            active = np.flatnonzero(mask)
+            span = (active[-1] - active[0]) / sr if active.size else 0.0
+            rate = len(str(df.at[idx, "transcript"])) / max(span, EPS)
+            df.at[idx, "active_span_sec"] = round(span, 3)
+            df.at[idx, "active_chars_per_sec"] = round(rate, 3)
+            if rate < r["min_active_chars_per_sec"]:
+                decision = "invalid"
+                causes.append("active_speaking_rate_too_slow")
+            elif rate > r["max_active_chars_per_sec"]:
+                decision = "invalid"
+                causes.append("active_speaking_rate_too_fast")
+            notes.append(f"active span {span:.1f}s, {rate:.1f} chars/s "
+                         f"(range {r['min_active_chars_per_sec']}-{r['max_active_chars_per_sec']})")
+        df.at[idx, "quality_status"] = decision
+        df.at[idx, "exclusion_reason"] = ";".join(causes)
+        df.at[idx, "auto_review"] = f"{decision}: " + "; ".join(notes)
+    resolved = df["auto_review"] != ""
+    log.info("Auto-review resolved %d files: %s", int(resolved.sum()),
+             df.loc[resolved, "quality_status"].value_counts().to_dict())
+    return df
+
+
+def _assign(df: pd.DataFrame, mask, status: str, flag: str) -> None:
+    """Flag rows; 'invalid' overrides 'review', which overrides 'valid'. Flags accumulate."""
     rank = {"valid": 0, "review": 1, "invalid": 2}
     for idx in df.index[mask]:
         if rank[status] > rank[df.at[idx, "quality_status"]]:
             df.at[idx, "quality_status"] = status
-        prev = df.at[idx, "exclusion_reason"]
-        df.at[idx, "exclusion_reason"] = f"{prev};{reason}" if prev else reason
+        prev = df.at[idx, "audit_flags"]
+        df.at[idx, "audit_flags"] = f"{prev};{flag}" if prev else flag
+
+
+def _finalize_reasons(df: pd.DataFrame) -> pd.DataFrame:
+    """`exclusion_reason` only for files that are not valid. Rows without a more specific reason
+    (from a rule or a manual decision) take their audit flags."""
+    not_valid = df["quality_status"] != "valid"
+    fallback = not_valid & (df["exclusion_reason"] == "")
+    df.loc[fallback, "exclusion_reason"] = df.loc[fallback, "audit_flags"]
+    df.loc[~not_valid, "exclusion_reason"] = ""
+    return df
+
+
+def _count_tokens(series: pd.Series) -> dict:
+    return series.str.split(";").explode().value_counts().drop("", errors="ignore").to_dict()
 
 
 # --------------------------------------------------------------------------- speech
@@ -95,6 +166,7 @@ def audit_speech(cfg: dict, summary_only: bool = False) -> pd.DataFrame:
     a = cfg["speech_audit"]
     root = project_path(cfg["paths"]["speech_root"])
     df = pd.read_csv(manifest_path(cfg, "speech_manifest_raw.csv"), keep_default_na=False)
+    df["audit_flags"] = ""
     df["exclusion_reason"] = ""
     df["quality_status"] = "valid"
     df["manual_decision"] = ""
@@ -141,7 +213,9 @@ def audit_speech(cfg: dict, summary_only: bool = False) -> pd.DataFrame:
     if a.get("max_chars_per_sec") is not None:
         _assign(df, readable & (df["chars_per_sec"] > a["max_chars_per_sec"]), "review", "speaking_rate_too_fast")
 
-    df = _apply_manual_decisions(df, "speech", "utt_id", cfg)
+    df = _auto_review_speech(df, cfg)
+    df = _apply_manual_decisions(df, "speech", "utt_id", cfg)  # manual decisions override the rules
+    df = _finalize_reasons(df)
 
     # Primary-evaluation eligibility is separate from audio quality.
     df["eligible_primary"] = (df["quality_status"] == "valid") & ~(
@@ -150,23 +224,53 @@ def audit_speech(cfg: dict, summary_only: bool = False) -> pd.DataFrame:
     out = manifest_path(cfg, "speech_manifest.csv")
     df.to_csv(out, index=False)
     summary["status_counts"] = df.groupby(["official_split", "quality_status"]).size().unstack(fill_value=0).to_dict()
+    if "auto_review" in df:
+        auto = df[df["auto_review"] != ""]
+        summary["auto_review"] = auto.groupby(["official_split", "quality_status"]).size().unstack(fill_value=0).to_dict()
     summary["eligible_primary_per_split"] = df[df["eligible_primary"]].groupby("official_split").size().to_dict()
-    summary["exclusion_reasons"] = df["exclusion_reason"].str.split(";").explode().value_counts().drop("", errors="ignore").to_dict()
+    # Flags raised by the automatic checks (whatever the final decision) vs. reasons for exclusion.
+    summary["audit_flags_raised"] = _count_tokens(df["audit_flags"])
+    summary["exclusion_reasons"] = _count_tokens(df["exclusion_reason"])
     save_json(summary, manifest_path(cfg, "speech_audit_summary.json"))
     log.info("Wrote %s\n%s", out, df.groupby(["official_split", "quality_status"]).size().to_string())
     return df
 
 
 # --------------------------------------------------------------------------- noise
+def _flag_duplicate_noise(df: pd.DataFrame, eval_pool: str) -> None:
+    """Byte-identical noise files. Same category: keep one copy (the evaluation-pool copy first,
+    so the training pool can never repeat a test noise). Different categories: the label is
+    unreliable, so every copy is excluded."""
+    df["duplicate_of"] = ""
+    for _, g in df.groupby("content_md5"):
+        if len(g) < 2:
+            continue
+        if g["noise_category"].nunique() > 1:
+            _assign(df, df.index.isin(g.index), "invalid", "duplicate_conflicting_category")
+            for idx in g.index:
+                df.at[idx, "duplicate_of"] = ";".join(g.loc[g.index != idx, "noise_id"])
+            continue
+        keep = g.assign(_other_pool=g["noise_pool"] != eval_pool).sort_values(["_other_pool", "noise_id"]).index[0]
+        drop = g.index.drop(keep)
+        _assign(df, df.index.isin(drop), "invalid", "duplicate_file")
+        df.loc[drop, "duplicate_of"] = df.at[keep, "noise_id"]
+    n_dup = int((df["duplicate_of"] != "").sum())
+    if n_dup:
+        log.info("Duplicate noise files:\n%s",
+                 df.loc[df["duplicate_of"] != "", ["noise_id", "noise_category", "duplicate_of"]].to_string(index=False))
+
+
 def audit_noise(cfg: dict) -> pd.DataFrame:
     a = cfg["noise_audit"]
     root = project_path(cfg["paths"]["noise_root"])
     df = pd.read_csv(manifest_path(cfg, "noise_manifest_raw.csv"), keep_default_na=False)
+    df["audit_flags"] = ""
     df["exclusion_reason"] = ""
     df["quality_status"] = "valid"
     df["manual_decision"] = ""
     stats = _inspect_all([root / p for p in df["noise_path"]], 0.999, a["num_workers"])
     df = df.join(stats)
+    df["content_md5"] = [hashlib.md5((root / p).read_bytes()).hexdigest() for p in df["noise_path"]]
 
     readable = df["readable"].astype(bool)
     _assign(df, ~readable, "invalid", "unreadable")
@@ -178,8 +282,10 @@ def audit_noise(cfg: dict) -> pd.DataFrame:
     _assign(df, readable & (df["rms_dbfs"] < a["silence_rms_dbfs"]), "review", "near_silent")
     _assign(df, readable & (df["actual_sample_rate"] != cfg["audio"]["target_sample_rate"]),
             "review", "sample_rate_mismatch")
+    _flag_duplicate_noise(df, cfg["mixing"]["eval_noise_pool"])
 
     df = _apply_manual_decisions(df, "noise", "noise_id", cfg)
+    df = _finalize_reasons(df)
     out = manifest_path(cfg, "noise_manifest.csv")
     df.to_csv(out, index=False)
     log.info("Wrote %s\n%s", out,

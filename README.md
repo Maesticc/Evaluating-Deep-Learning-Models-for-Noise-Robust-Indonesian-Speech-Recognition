@@ -11,7 +11,8 @@ Comparative study of Indonesian automatic speech recognition (ASR) under environ
 
 Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/relative WER degradation, RTFx.
 
-> Status: implementation of the research plan (v4). No results are reported until the full runs are complete.
+> Status: implementation of the research plan (v5). Data audit and pilot mixing are done; no ASR results are
+> reported until the full runs are complete.
 > The local demo UI (`app/`) is intentionally deferred until the core pipeline is stable.
 
 ## Research questions
@@ -31,9 +32,30 @@ Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/rel
 
 - `metadata/dataset_metadata_public.csv` is the source of truth for paths, transcripts, speakers and splits. Official splits are never reshuffled.
 - The 132 synthetic repair files (`is_synthetic == True`) are excluded from the primary evaluation (`speech_audit.exclude_synthetic`).
-- Speech-like noise categories (`Babble`, `NeighborSpeaking`, `AirportAnnouncements`) are excluded. Ambience categories that may contain background talk (Cafe, Restaurant, Station, ...) are set to `review` and only used after listening.
-- Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment.
-- The corpus is prompted/read speech with a fixed sentence inventory (209 sentence slots); conclusions are limited to this corpus and the selected noise conditions.
+- Speech-like noise categories (`Babble`, `NeighborSpeaking`, `AirportAnnouncements`) are excluded. In `noise_test` the neighbour recordings are named `Neighbor_*.wav`; they are mapped to `NeighborSpeaking` and excluded too. Ambience categories that may contain background talk (Cafe, Restaurant, Station, ...) stay in `review` and are not used; they only exist in `noise_train`.
+- Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment. No noise file appears in both pools.
+- The corpus is prompted/read speech with a fixed sentence inventory (213 distinct sentences, and every test sentence also appears in the training split); conclusions are limited to this corpus and the selected noise conditions.
+
+### Audit results
+
+Audit run on all 104,500 speech files and 179 noise files (`speech_audit_summary.json`, `noise_manifest.csv`).
+
+| Split | Speakers | Files | Invalid | Eligible for the primary experiment |
+|---|---|---|---|---|
+| train | 28 | 73,150 | 41 | 72,987 |
+| val | 6 | 15,675 | 2 | 15,665 |
+| test | 3 human (M4, M8, M12) + 1 synthetic | 15,675 | 0 | 15,673 |
+
+- Every file is readable, non-empty, 16 kHz mono and has a transcript. Duration: median 4.5 s, 99.9th percentile 11.3 s, maximum 206 s.
+- Files outside the audit thresholds were flagged `review` and resolved by the documented rules in `speech_audit.auto_review`
+  instead of per-file listening:
+  - *Clipping* (1,138 files, mild: median 0.25 % clipped samples, concentrated in a few recording sessions): accepted below 1 %, excluded at 1 % or more (32 files, all in train).
+  - *Duration 1.5–15 s or speaking rate 5–30 characters/s* (26 files): the speaking rate is recomputed over the active-speech span. Between 3 and 30 characters/s the file is accepted (it only had extra silence); otherwise it is excluded (11 files: extra or wrong content, or truncated audio).
+- `audit_flags` lists every automatic flag a file received. `exclusion_reason` is filled only for files that are not valid.
+  Decisions in `manual_review_decisions.csv` override the rules.
+- Noise used for evaluation: 31 `noise_test` files in 6 categories (AirConditioner 10, Munching 8, ShuttingDoor 8,
+  CopyMachine 2, Typing 2, VacuumCleaner 1). Byte-identical noise files are detected: `noise_train/AirConditioner_2` and
+  `noise_train/SqueakyChair_3` are the same recording with different labels, so both are excluded.
 
 Raw data are **not** committed. See [`data/README.md`](data/README.md).
 
@@ -89,10 +111,9 @@ python -m src.data_loader build-manifests
 
 # 3. Audit. Inspect the duration distribution first, then set thresholds in config.yaml
 python -m src.audio_validation --target speech --summary-only
-python -m src.audio_validation --target all
-#    Listen to files with status "review" and record decisions in
-#    data/processed/manifests/manual_review_decisions.csv  (manifest,id,decision,note)
-#    then re-run the audit.
+python -m src.audio_validation --target all                    # ~13 min for the full corpus
+#    "review" speech files are resolved by speech_audit.auto_review. To override a decision, add a row to
+#    data/processed/manifests/manual_review_decisions.csv  (manifest,id,decision,note) and re-run the audit.
 
 # 4. Pilot: 20-50 test utterances, all SNRs
 python -m src.noise_mixing build-pairs --split test --pilot
@@ -113,9 +134,9 @@ python -m src.evaluate
 
 **Noise mixing** (`src/noise_mixing.py`)
 - `SNR(dB) = 10·log10(P_speech / P_noise)`. Speech power is measured over active-speech frames (25 ms / 10 ms frames within 40 dB of the loudest frame). Noise power is measured over the full added segment.
-- The noise segment is cropped (or tiled if shorter) from a seeded offset. The same noise file and offset are reused for every SNR of an utterance, so conditions differ only in noise level.
+- The noise segment is cropped (or tiled if shorter) from a seeded offset. The same noise file and offset are reused for every SNR of an utterance.
 - Noise categories are assigned round-robin so each category gets a similar number of utterances.
-- If a mixture would clip, speech and noise are scaled by the same gain. This keeps the SNR unchanged, and the gain is recorded.
+- Clipping protection (`mixing.gain_scope: utterance`): impulsive noise (Typing, CopyMachine, Munching) can push a mixture above full scale. One output gain per utterance, taken from its loudest mixture, is applied to speech and noise in all five conditions, clean included. The SNR is unchanged and the speech component is identical across conditions, so conditions differ only in noise level. In the pilot, 15 of 30 utterances were attenuated (median −0.5 dB, at most −17.9 dB). The gain is recorded per row.
 - The achieved SNR is recalculated for every mixture and checked against a 0.1 dB tolerance.
 - Mixing is deterministic and on the fly. The conditions manifest stores the noise file, offset, seed, target/achieved SNR, gain and clipping flags.
 
@@ -152,9 +173,11 @@ To be recorded after the environment is tested: Python, PyTorch, torchaudio, Tra
 
 ## Limitations
 
-- The speech is prompted/read with overlapping prompts across splits. These results do not measure open-vocabulary or spontaneous-speech performance.
-- The noise conditions are limited to the audited MS-SNSD categories.
-- Whisper Large-v3 needs a GPU with about 4 GB or more of memory in fp16. If the hardware is insufficient, run the pilot first and document any smaller checkpoint used instead.
+- The speech is prompted/read, and every test sentence also occurs in the training split. The custom model has therefore seen the test sentences (spoken by other speakers), while the pretrained models have not. These results do not measure open-vocabulary or spontaneous-speech performance.
+- The test split has only three human speakers, all male (M4, M8, M12). Results may not transfer to female speakers.
+- The noise conditions are limited to six audited MS-SNSD categories, one of which (VacuumCleaner) has a single recording.
+- Deviation from the plan: noise categories and speech review cases were not checked by listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. An automatic check for speech inside the noise files and for transcript/audio mismatches (high CER on clean audio) is planned for the pilot run.
+- Whisper Large-v3 in fp16 needs about 3.1 GB for the weights alone; 6 GB or more of GPU memory is a safer estimate. The development laptop has a 4 GB RTX 3050, so the pilot decides whether Large-v3 fits; any smaller checkpoint used instead is documented.
 
 ## References
 
