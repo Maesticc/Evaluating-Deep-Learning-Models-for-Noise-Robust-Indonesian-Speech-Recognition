@@ -34,10 +34,15 @@ audio:
   convert_to_mono: true          # all three models expect mono input
 
 speech_audit:
-  # Leave duration thresholds null until the duration distribution has been inspected
-  # (python -m src.audio_validation --target speech prints a summary).
-  min_duration_sec: null
-  max_duration_sec: null
+  # Set after inspecting the full corpus (2026-11-17): duration median 4.5 s, 99.9% 11.3 s,
+  # min 1.56 s, max 206 s. Files outside these bounds go to review, never auto-reject.
+  min_duration_sec: 1.5
+  max_duration_sec: 15.0
+  # Speaking rate = transcript characters / duration. Median 13.5 chars/s, 0.1% 6.2, 99.9% 23.1.
+  # Very slow rates (e.g. a 9-word prompt lasting 206 s) suggest long silence or an
+  # audio/transcript mismatch; very fast rates suggest truncated audio.
+  min_chars_per_sec: 5.0
+  max_chars_per_sec: 30.0
   silence_rms_dbfs: -50.0        # whole-file RMS below this -> review (never auto-reject)
   clipping_peak: 0.999           # |sample| >= this counts as clipped
   clipping_fraction_review: 0.001  # fraction of clipped samples that triggers review

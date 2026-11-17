@@ -135,6 +135,11 @@ def audit_speech(cfg: dict, summary_only: bool = False) -> pd.DataFrame:
         _assign(df, readable & (df["actual_duration_sec"] > a["max_duration_sec"]), "review", "too_long")
     else:
         log.warning("Duration thresholds are not set; inspect the summary and set them in config.yaml")
+    df["chars_per_sec"] = (df["transcript"].astype(str).str.len() / df["actual_duration_sec"]).round(3)
+    if a.get("min_chars_per_sec") is not None:
+        _assign(df, readable & (df["chars_per_sec"] < a["min_chars_per_sec"]), "review", "speaking_rate_too_slow")
+    if a.get("max_chars_per_sec") is not None:
+        _assign(df, readable & (df["chars_per_sec"] > a["max_chars_per_sec"]), "review", "speaking_rate_too_fast")
 
     df = _apply_manual_decisions(df, "speech", "utt_id", cfg)
 
