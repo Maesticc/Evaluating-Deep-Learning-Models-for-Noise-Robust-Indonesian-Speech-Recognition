@@ -1,0 +1,6 @@
+condition,wav2vec2
+clean,1
+snr_0dB,1
+snr_10dB,1
+snr_20dB,1
+snr_5dB,1

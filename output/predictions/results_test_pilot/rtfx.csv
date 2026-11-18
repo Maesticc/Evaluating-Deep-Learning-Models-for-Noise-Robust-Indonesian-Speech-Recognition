@@ -1,0 +1,2 @@
+model,audio_sec,inference_sec,rtfx
+wav2vec2,714.50875,32.07481289999487,22.276318562722288
