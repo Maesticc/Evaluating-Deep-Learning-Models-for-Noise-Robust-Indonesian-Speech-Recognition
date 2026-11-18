@@ -1,4 +1,4 @@
-"""Load the ASR systems (custom model, Wav2Vec2, two Whisper checkpoints) behind one interface: `transcribe(list[np.ndarray]) -> list[str]`.
+"""Load the three ASR systems behind one interface: `transcribe(list[np.ndarray]) -> list[str]`.
 
 Each pretrained checkpoint uses its own official processor/tokenizer; no shared feature
 extraction is forced across models. MFCCs are not used anywhere in these input paths.
@@ -12,7 +12,7 @@ import torch
 from src.custom_cnn_bilstm_ctc import load_checkpoint, pad_batch
 from src.utils import project_path
 
-MODEL_NAMES = ("custom_cnn_bilstm_ctc", "wav2vec2", "whisper", "whisper_turbo")
+MODEL_NAMES = ("custom_cnn_bilstm_ctc", "wav2vec2", "whisper")
 WHISPER_MAX_SEC = 30.0
 
 
@@ -79,12 +79,11 @@ class Wav2Vec2Model(ASRModel):
 
 
 class WhisperModel(ASRModel):
-    """Any Whisper checkpoint; `name` selects its block in config.yaml (whisper, whisper_turbo)."""
+    name = "whisper"
 
-    def __init__(self, cfg: dict, device: str, name: str = "whisper"):
+    def __init__(self, cfg: dict, device: str):
         from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-        self.name = name
         self.mcfg = cfg["models"][self.name]
         self.device = device
         self.dtype = torch.float16 if (self.mcfg.get("fp16") and device == "cuda") else torch.float32
@@ -124,9 +123,7 @@ class WhisperModel(ASRModel):
 
 
 def load_model(name: str, cfg: dict, device: str) -> ASRModel:
-    classes = {"custom_cnn_bilstm_ctc": CustomModel, "wav2vec2": Wav2Vec2Model}
-    if name in ("whisper", "whisper_turbo"):
-        return WhisperModel(cfg, device, name=name)
+    classes = {"custom_cnn_bilstm_ctc": CustomModel, "wav2vec2": Wav2Vec2Model, "whisper": WhisperModel}
     if name not in classes:
         raise ValueError(f"Unknown model '{name}'. Choose from {MODEL_NAMES}")
     return classes[name](cfg, device)

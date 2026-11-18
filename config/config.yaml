@@ -166,19 +166,9 @@ models:
     # spills into shared system memory and runs ~2-3x slower. Batch size does not change the output.
     batch_size: 1
     fp16: true                   # only applied on CUDA
-
-  # Candidate replacement for large-v3 on the 4 GB GPU (see report/whisper_model_selection.md).
-  # Same encoder as large-v3, decoder pruned from 32 to 4 layers (809M parameters, ~1.6 GB in fp16).
-  # Generation settings are identical to `whisper` so the two checkpoints are directly comparable.
-  whisper_turbo:
-    checkpoint: openai/whisper-large-v3-turbo
-    language: indonesian
-    task: transcribe
-    num_beams: 1
-    max_new_tokens: 225
-    # Not yet measured on the RTX 3050. Lower to 4 (or 1) if peak memory spills into shared memory.
-    batch_size: 8
-    fp16: true
+    # Plan v5 section 7.3: if the hardware cannot run Large-v3, set checkpoint to
+    # openai/whisper-large-v3-turbo (same settings) and record the change in
+    # report/whisper_model_selection.md and the README.
 
 inference:
   warmup_batches: 1              # excluded from timing

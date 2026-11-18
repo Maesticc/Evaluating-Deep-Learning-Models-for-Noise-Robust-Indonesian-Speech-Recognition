@@ -8,7 +8,6 @@ Comparative study of Indonesian automatic speech recognition (ASR) under environ
 | Custom CNN-BiLSTM-CTC | 80-bin log-Mel filterbank (frozen in `config/config.yaml`) | Trained from scratch on the official training split |
 | [Wav2Vec2 XLSR Indonesian](https://huggingface.co/indonesian-nlp/wav2vec2-large-xlsr-indonesian) | Raw waveform via the checkpoint's processor | Pretrained, evaluated without fine-tuning |
 | [Whisper Large-v3](https://huggingface.co/openai/whisper-large-v3) | Log-Mel via the checkpoint's processor, `language=indonesian`, `task=transcribe` | Pretrained, evaluated without fine-tuning |
-| [Whisper Large-v3 Turbo](https://huggingface.co/openai/whisper-large-v3-turbo) (`whisper_turbo`) | Same as Large-v3 (same encoder, 4-layer decoder) | Candidate replacement for Large-v3 on the 4 GB GPU, see [`report/whisper_model_selection.md`](report/whisper_model_selection.md) |
 
 Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/relative WER degradation, RTFx.
 
@@ -35,7 +34,7 @@ Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/rel
 - The 132 synthetic repair files (`is_synthetic == True`) are excluded from the primary evaluation (`speech_audit.exclude_synthetic`).
 - Speech-like noise categories (`Babble`, `NeighborSpeaking`, `AirportAnnouncements`) are excluded. In `noise_test` the neighbour recordings are named `Neighbor_*.wav`; they are mapped to `NeighborSpeaking` and excluded too. Ambience categories that may contain background talk (Cafe, Restaurant, Station, ...) stay in `review` and are not used; they only exist in `noise_train`.
 - Music is out of scope (`noise_audit.include_music: false`); the study covers non-speech environmental noise only.
-- Checkpoints were verified on Hugging Face before use: all three accept 16 kHz mono input through their official processor, list Indonesian (`id`) as a supported language, and are openly licensed (`indonesian-nlp/wav2vec2-large-xlsr-indonesian` Apache-2.0, `openai/whisper-large-v3` Apache-2.0, `openai/whisper-large-v3-turbo` MIT).
+- Checkpoints were verified on Hugging Face before use: both accept 16 kHz mono input through their official processor, list Indonesian (`id`) as a supported language, and are openly licensed (`indonesian-nlp/wav2vec2-large-xlsr-indonesian` Apache-2.0, `openai/whisper-large-v3` Apache-2.0; the documented fallback `openai/whisper-large-v3-turbo` is MIT).
 - Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment and for the validation development subset (same six categories). No noise file appears in both pools, and test noise is never used for a protocol or checkpoint decision.
 - The corpus is prompted/read speech with a fixed sentence inventory (213 distinct sentences, and every test sentence also appears in the training split); conclusions are limited to this corpus and the selected noise conditions.
 
@@ -146,12 +145,8 @@ python -m src.noise_mixing build-pairs --split test --pilot
 python -m src.noise_mixing export-pilot                         # WAVs for listening
 python -m src.inference --pilot --models wav2vec2 whisper       # pretrained models first (pipeline/hardware check)
 python -m src.evaluate --pilot --models wav2vec2 whisper
-
-# 4b. Whisper checkpoint choice on a validation development subset (never on test results;
-#     see report/whisper_model_selection.md). Val utterances are mixed with noise_train noise.
-python -m src.noise_mixing build-pairs --split val --pilot
-python -m src.inference --split val --pilot --models whisper whisper_turbo
-python -m src.evaluate --split val --pilot
+#    Whisper stays Large-v3 as planned. Only if the hardware cannot run it, follow
+#    report/whisper_model_selection.md (plan 7.3; checked on a val development subset, never on test results).
 
 # 5. Train the custom model (train split; val for early stopping/checkpoint selection)
 python -m src.train_custom_model
@@ -159,11 +154,10 @@ python -m src.train_custom_model
 python -m src.inference --pilot --models custom_cnn_bilstm_ctc
 python -m src.evaluate --pilot --models custom_cnn_bilstm_ctc wav2vec2 whisper
 
-# 6. Freeze config.yaml, then run the full comparison with exactly one Whisper checkpoint
-#    (whisper or whisper_turbo, as decided in step 4b)
+# 6. Freeze config.yaml, then run the full comparison
 python -m src.noise_mixing build-pairs --split test
-python -m src.inference --models custom_cnn_bilstm_ctc wav2vec2 whisper_turbo
-python -m src.evaluate --models custom_cnn_bilstm_ctc wav2vec2 whisper_turbo
+python -m src.inference
+python -m src.evaluate
 ```
 
 ## Experimental protocol
@@ -180,7 +174,7 @@ python -m src.evaluate --models custom_cnn_bilstm_ctc wav2vec2 whisper_turbo
 - All models use the same test utterances, noise segments, SNR targets and normalization. `evaluate.py` scores only rows present for every model.
 - The pretrained models are not fine-tuned in the primary experiment. The custom model uses only the training split. The validation split is used for checkpoint selection, and the test set is not used for tuning.
 - Every noisy variant stays in its utterance's official split.
-- Exactly one Whisper checkpoint enters the three-model comparison. It is chosen on a validation development subset (val speech + `noise_train` noise), never on test results.
+- Whisper is Large-v3 as planned. If the hardware requires a smaller checkpoint (plan 7.3), the change is checked on a validation development subset (val speech + `noise_train` noise), never on test results, and documented.
 
 **Custom CNN-BiLSTM-CTC decisions** (frozen before training; `config.yaml` → `models.custom_cnn_bilstm_ctc`, `src/custom_cnn_bilstm_ctc.py`)
 - Input: 80-bin log-Mel filterbank, 16 kHz, 25 ms window (`n_fft` 400), 10 ms hop, per-utterance normalization.
@@ -214,7 +208,7 @@ Results template. Values are filled in from actual runs only.
 |---|---|---|---|---|---|
 | Custom CNN-BiLSTM-CTC | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
 | Wav2Vec2 XLSR Indonesian | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
-| Whisper Large-v3 or Large-v3 Turbo | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
+| Whisper Large-v3 | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
 
 ## Limitations
 
@@ -223,7 +217,7 @@ Results template. Values are filled in from actual runs only.
 - The test split has only three human speakers, all male (M4, M8, M12). Results may not transfer to female speakers.
 - The noise conditions are limited to six audited MS-SNSD categories, one of which (VacuumCleaner) has a single recording.
 - Listening (plan 5): until the listening sheet is filled, noise categories and speech review cases are resolved without listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. `--target listening-sheet` exports every evaluation noise file, 2 `noise_train` files per evaluation category, every rule-resolved duration/speaking-rate case and rejected clipping case, 10 accepted clipping cases and 10 eligible utterances per split; the decisions recorded there override the rules. If the sheet is not filled before the full run, this remains a deviation from the plan and is reported as such. Transcript/audio mismatches are checked automatically: `src.evaluate` lists clean utterances whose CER is at least `evaluation.mismatch_clean_cer` (30 %) for every model in `clean_mismatch_candidates.csv` (pilot: none). Speech inside the noise files is screened automatically with Wav2Vec2 (`python -m src.audio_validation --target noise-speech`, report in `noise_speech_check.csv`); suspected files are reviewed and excluded through `manual_review_decisions.csv`.
-- Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. Large-v3 Turbo is evaluated as a replacement; the choice and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
+- Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. The full run therefore needs a larger GPU for Large-v3; if none is available, the plan's fallback (a smaller checkpoint, plan 7.3) and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
 
 ## References
 

@@ -5,7 +5,7 @@ models receive identical inputs. Timing covers model inference only (waveform ge
 excluded) and skips warm-up batches.
 
 Usage:
-    python -m src.inference --models whisper whisper_turbo wav2vec2 custom_cnn_bilstm_ctc [--pilot] [--split test]
+    python -m src.inference --models whisper wav2vec2 custom_cnn_bilstm_ctc [--pilot] [--split test]
 """
 
 from __future__ import annotations
