@@ -44,3 +44,25 @@ def test_runtime_table_joins_run_metadata(tmp_path):
     t = runtime_table(rtfx, tmp_path, "t").set_index("model")
     assert t.loc["whisper_turbo", "gpu"] == "RTX" and t.loc["whisper_turbo", "batch_size"] == 8
     assert pd.isna(t.loc["wav2vec2", "gpu"])  # missing run metadata does not drop the row
+
+
+def test_check_references_detects_changes():
+    import pytest
+
+    from src.evaluate import check_references
+
+    pred = pd.DataFrame({"model": ["a", "b"], "utt_id": ["u1", "u1"], "reference": ["Halo dunia", "Halo dunia"]})
+    check_references(pred, pd.DataFrame({"utt_id": ["u1"], "transcript": ["Halo dunia"]}))
+    with pytest.raises(ValueError):
+        check_references(pred, pd.DataFrame({"utt_id": ["u1"], "transcript": ["Halo, dunia"]}))
+    with pytest.raises(ValueError):
+        check_references(pred.assign(reference=["Halo dunia", "Halo"]), None)
+
+
+def test_accuracy_vs_speed_table():
+    from src.evaluate import accuracy_vs_speed
+
+    by_cond = pd.DataFrame({"model": ["a", "a"], "condition": ["snr_0dB", "clean"], "wer": [20.0, 5.0]})
+    t = accuracy_vs_speed(by_cond, pd.DataFrame({"model": ["a"], "rtfx": [3.0]}))
+    assert t.columns.tolist() == ["model", "rtfx", "clean", "snr_0dB"]
+    assert t.iloc[0].tolist() == ["a", 3.0, 5.0, 20.0]

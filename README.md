@@ -132,6 +132,7 @@ python -m src.data_loader build-manifests
 # 3. Audit. Inspect the duration distribution first, then set thresholds in config.yaml
 python -m src.audio_validation --target speech --summary-only
 python -m src.audio_validation --target all                    # ~13 min for the full corpus
+python -m src.audio_validation --target noise-speech           # screen valid noise files for speech (Wav2Vec2)
 #    "review" speech files are resolved by speech_audit.auto_review. To override a decision, add a row to
 #    data/processed/manifests/manual_review_decisions.csv  (manifest,id,decision,note) and re-run the audit.
 
@@ -189,6 +190,8 @@ python -m src.evaluate --models custom_cnn_bilstm_ctc wav2vec2 whisper_turbo
 - `output/predictions/predictions_<tag>_<model>.csv`: per-utterance hypotheses and timing
 - `output/predictions/results_<tag>/summary_by_model_condition.csv`: WER/CER with 95% bootstrap CI, ΔWER, relative degradation, RTFx
 - `output/predictions/results_<tag>/rtfx.csv`: RTFx per model with checkpoint, precision, device, GPU, batch size, peak GPU memory and library versions
+- `output/predictions/results_<tag>/accuracy_vs_speed.csv` and `output/plots/<tag>/accuracy_vs_speed.png`: WER per condition against RTFx (accuracy-versus-speed trade-off)
+- `data/processed/manifests/noise_speech_check.csv`: noise files screened for speech (transcribed characters per second)
 - `output/predictions/results_<tag>/summary_by_model_noise_category.csv`
 - `output/predictions/results_<tag>/model_rank_by_condition.csv`
 - `output/predictions/results_<tag>/clean_mismatch_candidates.csv`: possible transcript/audio mismatches (reported, not excluded)
@@ -206,10 +209,11 @@ Results template. Values are filled in from actual runs only.
 
 ## Limitations
 
+- This is a practical comparison between a custom model trained on this corpus and two pretrained models used without fine-tuning, not an architecture-only comparison with identical training exposure. Fine-tuning or noise-augmented training, if done later, is reported as a separate secondary experiment.
 - The speech is prompted/read, and every test sentence also occurs in the training split. The custom model has therefore seen the test sentences (spoken by other speakers), while the pretrained models have not. These results do not measure open-vocabulary or spontaneous-speech performance.
 - The test split has only three human speakers, all male (M4, M8, M12). Results may not transfer to female speakers.
 - The noise conditions are limited to six audited MS-SNSD categories, one of which (VacuumCleaner) has a single recording.
-- Deviation from the plan: noise categories and speech review cases were not checked by listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. Transcript/audio mismatches are checked automatically: `src.evaluate` lists clean utterances whose CER is at least `evaluation.mismatch_clean_cer` (30 %) for every model in `clean_mismatch_candidates.csv` (pilot: none). An automatic check for speech inside the noise files is still planned.
+- Deviation from the plan: noise categories and speech review cases were not checked by listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. Transcript/audio mismatches are checked automatically: `src.evaluate` lists clean utterances whose CER is at least `evaluation.mismatch_clean_cer` (30 %) for every model in `clean_mismatch_candidates.csv` (pilot: none). Speech inside the noise files is screened automatically with Wav2Vec2 (`python -m src.audio_validation --target noise-speech`, report in `noise_speech_check.csv`); suspected files are reviewed and excluded through `manual_review_decisions.csv`.
 - Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. Large-v3 Turbo is evaluated as a replacement; the choice and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
 
 ## References

@@ -23,7 +23,7 @@ import pandas as pd
 
 from src.model_loader import MODEL_NAMES
 from src.preprocessing import normalize_text
-from src.utils import ensure_dir, get_logger, load_config, load_json, project_path, save_json
+from src.utils import ensure_dir, get_logger, load_config, load_json, manifest_path, project_path, save_json
 
 log = get_logger("evaluate")
 CONDITION_ORDER = ["clean", "snr_20dB", "snr_10dB", "snr_5dB", "snr_0dB"]
@@ -142,7 +142,8 @@ def runtime_table(rtfx: pd.DataFrame, pred_dir, tag: str) -> pd.DataFrame:
     return rtfx.merge(pd.DataFrame(rows), on="model", how="left")
 
 
-def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir) -> None:
+def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir,
+               trade_off: pd.DataFrame | None = None) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -192,6 +193,43 @@ def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir) -> None:
         fig.savefig(plots_dir / "wer_heatmap_noise_category.png", dpi=150)
         plt.close(fig)
 
+    if trade_off is not None and not trade_off.empty:
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        for cond, marker in (("clean", "o"), ("snr_0dB", "s")):
+            if cond in trade_off:
+                ax.scatter(trade_off["rtfx"], trade_off[cond], marker=marker, label=f"WER {cond}")
+        for _, r in trade_off.iterrows():
+            ax.annotate(r["model"], (r["rtfx"], r.get("clean", np.nan)), textcoords="offset points", xytext=(5, 5))
+        ax.set_xscale("log")
+        ax.set_xlabel("RTFx (log scale, higher = faster)")
+        ax.set_ylabel("WER (%)")
+        ax.set_title("Accuracy vs. inference speed")
+        ax.grid(alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(plots_dir / "accuracy_vs_speed.png", dpi=150)
+        plt.close(fig)
+
+
+def accuracy_vs_speed(by_cond: pd.DataFrame, rtfx: pd.DataFrame) -> pd.DataFrame:
+    """WER per condition next to RTFx (plan objective: accuracy-versus-inference-speed trade-off)."""
+    wer = by_cond.pivot(index="model", columns="condition", values="wer")
+    wer = wer[[c for c in CONDITION_ORDER if c in wer.columns]].reset_index()
+    return rtfx[["model", "rtfx"]].merge(wer, on="model")
+
+
+def check_references(pred: pd.DataFrame, conditions: pd.DataFrame | None) -> None:
+    """Every model is scored against the same, unchanged reference transcript (plan section 11.6)."""
+    per_utt = pred.groupby("utt_id")["reference"].nunique()
+    if (per_utt > 1).any():
+        raise ValueError(f"Models disagree on the reference of {list(per_utt[per_utt > 1].index[:5])}")
+    if conditions is not None:
+        source = conditions.drop_duplicates("utt_id").set_index("utt_id")["transcript"]
+        refs = pred.drop_duplicates("utt_id").set_index("utt_id")["reference"]
+        changed = refs[refs != source.reindex(refs.index)]
+        if len(changed):
+            raise ValueError(f"References differ from the conditions manifest for {list(changed.index[:5])}")
+
 
 def evaluate(cfg: dict, tag: str, models: list[str] | None = None) -> None:
     pred_dir = project_path(cfg["paths"]["predictions_dir"])
@@ -205,6 +243,8 @@ def evaluate(cfg: dict, tag: str, models: list[str] | None = None) -> None:
              sorted(pred["model"].unique()), int(failed.sum()))
     for col in ("audio_sec", "inference_sec"):
         pred[col] = pd.to_numeric(pred[col], errors="coerce")
+    cond_path = manifest_path(cfg, f"conditions_{tag}.csv")
+    check_references(pred, pd.read_csv(cond_path, keep_default_na=False) if cond_path.exists() else None)
 
     # Fair comparison: keep only utterance/condition pairs present for every model.
     key = ["utt_id", "condition", "realization"]
@@ -234,6 +274,7 @@ def evaluate(cfg: dict, tag: str, models: list[str] | None = None) -> None:
     rank = by_cond.pivot(index="condition", columns="model", values="wer").rank(axis=1).astype(int)
     rtfx = summarize(scored, ["model"], cfg, with_ci=False)[["model", "audio_sec", "inference_sec", "rtfx"]]
     rtfx = runtime_table(rtfx, pred_dir, tag)
+    trade_off = accuracy_vs_speed(by_cond, rtfx)
 
     out_dir = ensure_dir(pred_dir / f"results_{tag}")
     scored.to_csv(out_dir / "scored_utterances.csv", index=False)
@@ -242,12 +283,13 @@ def evaluate(cfg: dict, tag: str, models: list[str] | None = None) -> None:
     rank.to_csv(out_dir / "model_rank_by_condition.csv")
     rtfx.to_csv(out_dir / "rtfx.csv", index=False)
     mismatch.to_csv(out_dir / "clean_mismatch_candidates.csv", index=False)
+    trade_off.to_csv(out_dir / "accuracy_vs_speed.csv", index=False)
     runs = {m: str(pred_dir / f"run_{tag}_{m}.json") for m in scored["model"].unique()}
     save_json({"tag": tag, "normalization": cfg.get("text_normalization"), "run_metadata": runs,
                "n_common_rows": len(common)}, out_dir / "evaluation_info.json")
 
     plots_dir = ensure_dir(project_path(cfg["paths"]["plots_dir"]) / tag)
-    make_plots(by_cond, by_cat, plots_dir)
+    make_plots(by_cond, by_cat, plots_dir, trade_off)
 
     cols = ["model", "condition", "n_utterances", "wer", "cer", "abs_wer_degradation", "rel_wer_degradation"]
     log.info("Results (%s):\n%s", tag, by_cond[cols].round(2).to_string(index=False))

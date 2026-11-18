@@ -293,13 +293,57 @@ def audit_noise(cfg: dict) -> pd.DataFrame:
     return df
 
 
+def speech_in_noise_flags(texts: list[str], durations: list[float], max_chars_per_sec: float) -> list[dict]:
+    """Transcribed characters per second of noise audio; Indonesian speech runs at ~13 chars/s."""
+    rows = []
+    for text, dur in zip(texts, durations):
+        chars = len(text.replace(" ", ""))
+        rate = chars / dur if dur > 0 else 0.0
+        rows.append({"transcribed_chars": chars, "chars_per_sec": round(rate, 3),
+                     "speech_suspected": rate >= max_chars_per_sec, "transcript": text})
+    return rows
+
+
+def check_noise_for_speech(cfg: dict) -> pd.DataFrame:
+    """Screen valid noise files for speech with Wav2Vec2 XLSR Indonesian (plan sections 3.2, 5.2, 16).
+
+    Suspected files are reported in noise_speech_check.csv for review, not excluded automatically;
+    a decision goes into manual_review_decisions.csv like any other audit override.
+    """
+    from src.model_loader import load_model
+    from src.noise_mixing import load_noise
+    from src.utils import resolve_device
+
+    noise = pd.read_csv(manifest_path(cfg, "noise_manifest.csv"), keep_default_na=False)
+    noise = noise[noise["quality_status"] == "valid"].reset_index(drop=True)
+    model = load_model("wav2vec2", cfg, resolve_device(cfg["inference"]["device"]))
+    sr = cfg["audio"]["target_sample_rate"]
+    chunk = 20 * sr  # bounded memory for long noise recordings
+    texts, durations = [], []
+    for path in noise["noise_path"]:
+        audio = load_noise(cfg, path)
+        texts.append(" ".join(model.transcribe([audio[i:i + chunk]])[0] for i in range(0, audio.size, chunk)).strip())
+        durations.append(audio.size / sr)
+    flags = pd.DataFrame(speech_in_noise_flags(texts, durations, cfg["noise_audit"]["speech_check_max_chars_per_sec"]))
+    out = pd.concat([noise[["noise_id", "noise_pool", "noise_category", "noise_path"]], flags], axis=1)
+    out.to_csv(manifest_path(cfg, "noise_speech_check.csv"), index=False)
+    suspected = out[out["speech_suspected"]]
+    log.info("Speech check: %d/%d valid noise files suspected of containing speech%s", len(suspected), len(out),
+             ("\n" + suspected[["noise_id", "chars_per_sec", "transcript"]].to_string(index=False)) if len(suspected) else "")
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=None)
-    parser.add_argument("--target", choices=["speech", "noise", "all"], default="all")
+    parser.add_argument("--target", choices=["speech", "noise", "all", "noise-speech"], default="all",
+                        help="noise-speech: screen valid noise files for speech with Wav2Vec2 (needs the model)")
     parser.add_argument("--summary-only", action="store_true")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if args.target == "noise-speech":
+        check_noise_for_speech(cfg)
+        return
     if args.target in ("speech", "all"):
         audit_speech(cfg, summary_only=args.summary_only)
     if args.target in ("noise", "all") and not args.summary_only:

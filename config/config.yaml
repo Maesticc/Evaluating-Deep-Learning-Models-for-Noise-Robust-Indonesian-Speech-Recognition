@@ -70,6 +70,10 @@ noise_audit:
   # Categories that may contain background talk: require manual listening before use.
   review_categories: [Cafe, CafeTeria, Restaurant, Station, Metro, Square, Office, Hallway]
   include_music: false
+  # Speech screening (python -m src.audio_validation --target noise-speech): a valid noise file whose
+  # Wav2Vec2 transcript reaches this many characters per second is reported for review.
+  # Read Indonesian speech in the corpus runs at ~13.5 chars/s (median).
+  speech_check_max_chars_per_sec: 2.0
   # Normalise inconsistent MS-SNSD filename prefixes.
   category_aliases:
     AirportAnnouncement: AirportAnnouncements
