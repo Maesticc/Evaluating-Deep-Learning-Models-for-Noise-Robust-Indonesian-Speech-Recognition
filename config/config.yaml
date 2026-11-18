@@ -148,7 +148,9 @@ models:
     task: transcribe
     num_beams: 1
     max_new_tokens: 225
-    batch_size: 4
+    # 1 on the 4 GB RTX 3050: batch 1 peaks at 3.36 GB and fits in VRAM; batch 4 needs 4.14 GB,
+    # spills into shared system memory and runs ~2-3x slower. Batch size does not change the output.
+    batch_size: 1
     fp16: true                   # only applied on CUDA
 
 inference:

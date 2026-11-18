@@ -87,15 +87,6 @@ app/                        # later phase: local demo UI
 report/
 ```
 
-## Setup
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate            # Windows  (Linux/macOS: source .venv/bin/activate)
-# Install PyTorch + torchaudio for your CUDA version first: https://pytorch.org/get-started/locally/
-pip install -r requirements.txt
-```
-
 ## Pipeline
 
 Run all commands from the repository root.
@@ -166,10 +157,6 @@ Results template. Values are filled in from actual runs only.
 | Custom CNN-BiLSTM-CTC | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
 | Wav2Vec2 XLSR Indonesian | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
 | Whisper Large-v3 | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
-
-## Environment
-
-To be recorded after the environment is tested: Python, PyTorch, torchaudio, Transformers, CUDA, GPU model and memory.
 
 ## Limitations
 
