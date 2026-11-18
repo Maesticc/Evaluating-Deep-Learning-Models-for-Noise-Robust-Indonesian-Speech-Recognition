@@ -139,8 +139,8 @@ python -m src.audio_validation --target noise-speech           # screen valid no
 # 4. Pilot: 20-50 test utterances, all SNRs
 python -m src.noise_mixing build-pairs --split test --pilot
 python -m src.noise_mixing export-pilot                         # WAVs for listening
-python -m src.inference --pilot
-python -m src.evaluate --pilot
+python -m src.inference --pilot --models wav2vec2 whisper       # pretrained models first (pipeline/hardware check)
+python -m src.evaluate --pilot --models wav2vec2 whisper
 
 # 4b. Whisper checkpoint choice on a validation development subset (never on test results;
 #     see report/whisper_model_selection.md). Val utterances are mixed with noise_train noise.
@@ -150,6 +150,9 @@ python -m src.evaluate --split val --pilot
 
 # 5. Train the custom model (train split; val for early stopping/checkpoint selection)
 python -m src.train_custom_model
+#    then complete the pilot with all three systems on the same inputs (plan 11.5)
+python -m src.inference --pilot --models custom_cnn_bilstm_ctc
+python -m src.evaluate --pilot --models custom_cnn_bilstm_ctc wav2vec2 whisper
 
 # 6. Freeze config.yaml, then run the full comparison with exactly one Whisper checkpoint
 #    (whisper or whisper_turbo, as decided in step 4b)
