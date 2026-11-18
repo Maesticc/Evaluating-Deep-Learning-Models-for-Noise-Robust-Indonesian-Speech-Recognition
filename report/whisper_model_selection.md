@@ -44,13 +44,25 @@ fixed sentence inventory, so it relies little on the decoder's language modellin
 
 ## Decision rule
 
-1. Run the pilot for turbo on the same 150 rows:
-   `python -m src.inference --pilot --models whisper_turbo`, then `python -m src.evaluate --pilot`.
-   `whisper` (large-v3) and `whisper_turbo` write separate prediction files, so the large-v3 pilot is kept.
+The plan (v5, sections 9.4 and 11) forbids choosing checkpoints from test results and asks for a
+separate development subset for protocol decisions. The test pilot above is used for pipeline and
+hardware validation only. The checkpoint choice is made on a **validation development subset**:
+validation utterances (speaker-disjoint from test) mixed with `noise_train` noise of the same six
+categories, so no test utterance or test noise file is involved.
+
+1. Build and run the development subset (30 val utterances x 5 conditions):
+   ```bash
+   python -m src.noise_mixing build-pairs --split val --pilot
+   python -m src.inference --split val --pilot --models whisper whisper_turbo
+   python -m src.evaluate --split val --pilot
+   ```
+   Results go to `output/predictions/results_val_pilot/`, separate from the test pilot.
 2. If turbo's WER lies inside large-v3's 95 % bootstrap CI in every condition (0 dB in particular),
-   use `whisper_turbo` for the full run and report large-v3 as a pilot-only reference.
-3. Otherwise, run large-v3 on the full set on a cloud GPU.
-4. Record the outcome and the measured turbo RTFx / peak memory in this file and in the README.
+   use `whisper_turbo` as the Whisper system of the three-model comparison.
+3. Otherwise, keep large-v3 and run it on the full set on a cloud GPU.
+4. Either way exactly one Whisper checkpoint enters the primary three-model comparison (plan section 9.1);
+   the other is not reported as a primary result. Record the outcome, the measured RTFx and peak memory
+   here and in the README, and freeze `config.yaml` before the full run (plan section 14, step 10).
 
 ## Outcome
 

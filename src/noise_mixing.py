@@ -11,6 +11,7 @@ seed, so any condition can be regenerated exactly and identical waveforms reach 
 
 Usage:
     python -m src.noise_mixing build-pairs [--split test] [--pilot]
+    python -m src.noise_mixing build-pairs --split val --pilot   # development subset (noise_train pool)
     python -m src.noise_mixing export-pilot          # write pilot WAVs for listening
 """
 
@@ -175,6 +176,21 @@ def eligible_noise(cfg: dict, pool: str) -> pd.DataFrame:
     return noise.sort_values("noise_id").reset_index(drop=True)
 
 
+def pairing_noise(cfg: dict, split: str) -> pd.DataFrame:
+    """Noise files available for mixing utterances of `split`.
+
+    Test utterances use the evaluation pool. Other splits (e.g. a validation development subset)
+    use the other pool, restricted to the evaluation categories, so no test noise file is used for
+    any protocol or checkpoint decision.
+    """
+    m = cfg["mixing"]
+    noise = eligible_noise(cfg, m["eval_noise_pool"])
+    if split == "test":
+        return noise
+    other = eligible_noise(cfg, m["augmentation_noise_pool"])
+    return other[other["noise_category"].isin(set(noise["noise_category"]))].reset_index(drop=True)
+
+
 def select_utterances(cfg: dict, split: str, pilot: bool) -> pd.DataFrame:
     speech = pd.read_csv(manifest_path(cfg, "speech_manifest.csv"), keep_default_na=False)
     speech = speech[(speech["official_split"] == split) &
@@ -198,7 +214,7 @@ def build_pairs(cfg: dict, split: str = "test", pilot: bool = False) -> pd.DataF
     sr = cfg["audio"]["target_sample_rate"]
     seed = cfg["project"]["seed"]
     speech = select_utterances(cfg, split, pilot)
-    noise = eligible_noise(cfg, m["eval_noise_pool"])
+    noise = pairing_noise(cfg, split)
     categories = sorted(noise["noise_category"].unique())
     log.info("%d utterances (%s%s) x %d noise categories %s", len(speech), split,
              ", pilot" if pilot else "", len(categories), categories)
