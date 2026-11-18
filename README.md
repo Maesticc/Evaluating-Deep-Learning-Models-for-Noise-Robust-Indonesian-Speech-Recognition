@@ -34,7 +34,7 @@ Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/rel
 - `metadata/dataset_metadata_public.csv` is the source of truth for paths, transcripts, speakers and splits. Official splits are never reshuffled.
 - The 132 synthetic repair files (`is_synthetic == True`) are excluded from the primary evaluation (`speech_audit.exclude_synthetic`).
 - Speech-like noise categories (`Babble`, `NeighborSpeaking`, `AirportAnnouncements`) are excluded. In `noise_test` the neighbour recordings are named `Neighbor_*.wav`; they are mapped to `NeighborSpeaking` and excluded too. Ambience categories that may contain background talk (Cafe, Restaurant, Station, ...) stay in `review` and are not used; they only exist in `noise_train`.
-- Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment. No noise file appears in both pools.
+- Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment and for the validation development subset (same six categories). No noise file appears in both pools, and test noise is never used for a protocol or checkpoint decision.
 - The corpus is prompted/read speech with a fixed sentence inventory (213 distinct sentences, and every test sentence also appears in the training split); conclusions are limited to this corpus and the selected noise conditions.
 
 ### Audit results
@@ -60,6 +60,31 @@ Audit run on all 104,500 speech files and 179 noise files (`speech_audit_summary
 
 Raw data are **not** committed. See [`data/README.md`](data/README.md).
 
+## Setup
+
+```bash
+python -m venv .venv && .venv\Scripts\activate          # Windows (source .venv/bin/activate elsewhere)
+# Install PyTorch for your CUDA version first: https://pytorch.org/get-started/locally/
+pip install -r requirements.txt
+python -m pytest -q tests                                  # unit tests, no data or GPU needed
+```
+
+Tested environment of the pilot runs (also written to `output/predictions/run_*.json`):
+
+| Component | Version |
+|---|---|
+| OS / CPU | Windows 11, AMD64 (AMD Family 25) |
+| GPU | NVIDIA GeForce RTX 3050 Laptop, 4.29 GB, CUDA 12.6 |
+| Python | 3.12.16 |
+| torch / torchaudio | 2.11.0+cu126 / 2.11.0+cu126 |
+| transformers | 5.23.0 |
+| numpy / pandas | 2.5.5 / 3.1.1 |
+| librosa / soundfile | 1.0.1 / 0.14.0 |
+| jiwer | not recorded in the pilot (fixed: versions now come from package metadata) |
+
+`requirements.txt` holds minimum versions. Exact pins (`pip freeze > requirements-lock.txt`) are made on the
+machine that runs the full evaluation, once that environment is confirmed.
+
 ## Repository structure
 
 ```
@@ -84,6 +109,7 @@ src/
   utils.py                  # config, seeds, logging, environment info
 config/config.yaml          # all experiment settings
 output/{models,logs,predictions,plots}/
+tests/                      # unit tests: normalization, SNR mixing, metrics, config consistency
 app/                        # later phase: local demo UI
 report/
 ```
@@ -112,8 +138,12 @@ python -m src.noise_mixing build-pairs --split test --pilot
 python -m src.noise_mixing export-pilot                         # WAVs for listening
 python -m src.inference --pilot
 python -m src.evaluate --pilot
-#    Whisper checkpoint choice: python -m src.inference --pilot --models whisper_turbo
-#    then re-run src.evaluate --pilot (see report/whisper_model_selection.md for the decision rule)
+
+# 4b. Whisper checkpoint choice on a validation development subset (never on test results;
+#     see report/whisper_model_selection.md). Val utterances are mixed with noise_train noise.
+python -m src.noise_mixing build-pairs --split val --pilot
+python -m src.inference --split val --pilot --models whisper whisper_turbo
+python -m src.evaluate --split val --pilot
 
 # 5. Train the custom model (train split; val for early stopping/checkpoint selection)
 python -m src.train_custom_model

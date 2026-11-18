@@ -1,0 +1,31 @@
+import numpy as np
+import pandas as pd
+
+from src.evaluate import add_degradation, clean_mismatch_candidates, error_counts
+
+
+def test_error_counts():
+    # one substitution, one deletion over 4 reference words
+    w_err, n_words, c_err, n_chars = error_counts("saya makan nasi goreng", "saya minum nasi")
+    assert (w_err, n_words) == (2, 4)
+    assert n_chars == len("saya makan nasi goreng") and c_err > 0
+    assert error_counts("halo", None)[:2] == (1, 1)
+
+
+def test_relative_degradation_with_zero_clean_wer():
+    table = pd.DataFrame({"model": ["a", "b"], "wer": [10.0, 5.0], "cer": [4.0, 2.0]})
+    clean = pd.DataFrame({"model": ["a", "b"], "wer": [0.0, 2.5], "cer": [0.0, 1.0]})
+    t = add_degradation(table, clean, ["model"]).set_index("model")
+    assert bool(t.loc["a", "rel_wer_undefined"]) and np.isnan(t.loc["a", "rel_wer_degradation"])
+    assert t.loc["a", "abs_wer_degradation"] == 10.0
+    assert t.loc["b", "rel_wer_degradation"] == 100.0
+
+
+def test_clean_mismatch_needs_every_model():
+    d = pd.DataFrame({"model": ["a", "b", "a", "b", "a"], "utt_id": ["u1", "u1", "u2", "u2", "u1"],
+                      "condition": ["clean"] * 4 + ["snr_0dB"], "char_errors": [5, 4, 5, 0, 9],
+                      "ref_chars": [10] * 5, "reference": ["r1", "r1", "r2", "r2", "r1"]})
+    out = clean_mismatch_candidates(d, 30.0)
+    assert out["utt_id"].tolist() == ["u1"]
+    assert out.loc[0, "clean_cer_a"] == 50 and out.loc[0, "reference"] == "r1"
+    assert clean_mismatch_candidates(d, 60.0).empty

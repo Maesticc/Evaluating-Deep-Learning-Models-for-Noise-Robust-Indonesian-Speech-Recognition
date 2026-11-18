@@ -96,11 +96,13 @@ def environment_info() -> dict:
         "platform": platform.platform(),
         "processor": platform.processor(),
     }
+    from importlib.metadata import PackageNotFoundError, version
+
+    # Installed distribution metadata: also covers packages without __version__ (e.g. jiwer).
     for pkg in ("numpy", "pandas", "torch", "torchaudio", "transformers", "jiwer", "librosa", "soundfile"):
         try:
-            module = __import__(pkg)
-            info[pkg] = getattr(module, "__version__", "unknown")
-        except ImportError:
+            info[pkg] = version(pkg)
+        except PackageNotFoundError:
             info[pkg] = None
     try:
         import torch
