@@ -8,6 +8,7 @@ Comparative study of Indonesian automatic speech recognition (ASR) under environ
 | Custom CNN-BiLSTM-CTC | 80-bin log-Mel filterbank (frozen in `config/config.yaml`) | Trained from scratch on the official training split |
 | [Wav2Vec2 XLSR Indonesian](https://huggingface.co/indonesian-nlp/wav2vec2-large-xlsr-indonesian) | Raw waveform via the checkpoint's processor | Pretrained, evaluated without fine-tuning |
 | [Whisper Large-v3](https://huggingface.co/openai/whisper-large-v3) | Log-Mel via the checkpoint's processor, `language=indonesian`, `task=transcribe` | Pretrained, evaluated without fine-tuning |
+| [Whisper Large-v3 Turbo](https://huggingface.co/openai/whisper-large-v3-turbo) (`whisper_turbo`) | Same as Large-v3 (same encoder, 4-layer decoder) | Candidate replacement for Large-v3 on the 4 GB GPU, see [`report/whisper_model_selection.md`](report/whisper_model_selection.md) |
 
 Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/relative WER degradation, RTFx.
 
@@ -75,7 +76,7 @@ src/
   audio_validation.py       # integrity, duration, silence/RMS, clipping, valid/review/invalid
   preprocessing.py          # audio standardization, deterministic text normalization
   noise_mixing.py           # noise selection, SNR mixing, achieved-SNR verification
-  model_loader.py           # the three models behind one transcribe() interface
+  model_loader.py           # all models (incl. two Whisper checkpoints) behind one transcribe() interface
   custom_cnn_bilstm_ctc.py  # custom model architecture
   train_custom_model.py     # training on the official train split (val for selection)
   inference.py              # predictions, runtime and configuration per model
@@ -111,6 +112,8 @@ python -m src.noise_mixing build-pairs --split test --pilot
 python -m src.noise_mixing export-pilot                         # WAVs for listening
 python -m src.inference --pilot
 python -m src.evaluate --pilot
+#    Whisper checkpoint choice: python -m src.inference --pilot --models whisper_turbo
+#    then re-run src.evaluate --pilot (see report/whisper_model_selection.md for the decision rule)
 
 # 5. Train the custom model (train split; val for early stopping/checkpoint selection)
 python -m src.train_custom_model
@@ -156,7 +159,7 @@ Results template. Values are filled in from actual runs only.
 |---|---|---|---|---|---|
 | Custom CNN-BiLSTM-CTC | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
 | Wav2Vec2 XLSR Indonesian | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
-| Whisper Large-v3 | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
+| Whisper Large-v3 or Large-v3 Turbo | WER/CER | WER/CER | WER/CER | WER/CER | WER/CER |
 
 ## Limitations
 
@@ -164,7 +167,7 @@ Results template. Values are filled in from actual runs only.
 - The test split has only three human speakers, all male (M4, M8, M12). Results may not transfer to female speakers.
 - The noise conditions are limited to six audited MS-SNSD categories, one of which (VacuumCleaner) has a single recording.
 - Deviation from the plan: noise categories and speech review cases were not checked by listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. An automatic check for speech inside the noise files and for transcript/audio mismatches (high CER on clean audio) is planned for the pilot run.
-- Whisper Large-v3 in fp16 needs about 3.1 GB for the weights alone; 6 GB or more of GPU memory is a safer estimate. The development laptop has a 4 GB RTX 3050, so the pilot decides whether Large-v3 fits; any smaller checkpoint used instead is documented.
+- Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. Large-v3 Turbo is evaluated as a replacement; the choice and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
 
 ## References
 
@@ -172,4 +175,5 @@ Results template. Values are filled in from actual runs only.
 - C. K. A. Reddy et al., "A Scalable Noisy Speech Dataset and Online Subjective Test Framework," Interspeech 2019 (MS-SNSD)
 - [indonesian-nlp/wav2vec2-large-xlsr-indonesian](https://huggingface.co/indonesian-nlp/wav2vec2-large-xlsr-indonesian)
 - [openai/whisper-large-v3](https://huggingface.co/openai/whisper-large-v3)
+- [openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo)
 - [JiWER](https://github.com/jitsi/jiwer)
