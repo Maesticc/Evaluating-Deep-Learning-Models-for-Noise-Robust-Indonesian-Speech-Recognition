@@ -13,6 +13,7 @@ paths:
   noise_root: data/raw/ms_snsd                 # sparse clone of microsoft/MS-SNSD
   manifests_dir: data/processed/manifests
   pilot_cache_dir: data/processed/pilot_cache
+  listening_dir: data/processed/listening      # listening sheet (committed) + copied WAVs (ignored)
   models_dir: output/models
   logs_dir: output/logs
   predictions_dir: output/predictions
@@ -105,6 +106,15 @@ mixing:
   gain_scope: utterance
   clip_peak: 0.999
   snr_tolerance_db: 0.1          # achieved SNR must be within this of the target
+
+listening:
+  # Manual listening (plan sections 5, 5.1, 5.2): python -m src.audio_validation --target listening-sheet
+  # exports every evaluation noise file, this many noise_train files per evaluation category, every
+  # rule-resolved duration/speaking-rate or rejected-clipping speech file, a sample of accepted clipping
+  # files and this many eligible utterances per split (transcript agreement).
+  noise_train_per_category: 2
+  speech_clipping_accepted: 10
+  speech_per_split: 10
 
 pilot:
   split: test

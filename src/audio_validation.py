@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import soundfile as sf
 
-from src.utils import get_logger, load_config, manifest_path, project_path, save_json
+from src.utils import ensure_dir, get_logger, load_config, manifest_path, project_path, save_json
 
 log = get_logger("audio_validation")
 
@@ -333,16 +333,92 @@ def check_noise_for_speech(cfg: dict) -> pd.DataFrame:
     return out
 
 
+LISTENING_SHEET = "listening_sheet.csv"
+NOISE_QUESTION = "Contains speech, babble or music, or is it the wrong category? yes -> invalid"
+SPEECH_QUESTION = "Does the audio match the transcript and is the speech usable? no -> invalid"
+
+
+def select_for_listening(speech: pd.DataFrame, noise: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Files to resolve by listening (plan sections 5, 5.1, 5.2): rows of manifest, id, file, category, transcript, check."""
+    lcfg, m, seed = cfg["listening"], cfg["mixing"], cfg["project"]["seed"]
+    valid = noise[noise["quality_status"] == "valid"]
+    eval_noise = valid[valid["noise_pool"] == m["eval_noise_pool"]]
+    other = valid[(valid["noise_pool"] == m["augmentation_noise_pool"])
+                  & valid["noise_category"].isin(set(eval_noise["noise_category"]))]
+    other = other.sample(frac=1, random_state=seed).groupby("noise_category").head(lcfg["noise_train_per_category"])
+    picked_noise = pd.concat([eval_noise, other]).sort_values("noise_id")
+    rows = [{"manifest": "noise", "id": r["noise_id"], "file": r["noise_path"], "category": r["noise_category"],
+             "transcript": "", "check": NOISE_QUESTION} for _, r in picked_noise.iterrows()]
+
+    flags = speech["audit_flags"].astype(str)
+    auto = speech["auto_review"].astype(str) if "auto_review" in speech else pd.Series("", index=speech.index)
+    rate = flags.str.contains("|".join(sorted(RATE_REASONS)))
+    clip_invalid = auto.str.startswith("invalid") & flags.str.contains("possible_clipping")
+    clip_valid = auto.str.startswith("valid") & flags.str.contains("possible_clipping") & ~rate
+    eligible = speech[speech["eligible_primary"].astype(str).str.lower() == "true"]
+    picked = pd.concat([
+        speech[(auto != "") & rate], speech[clip_invalid],
+        speech[clip_valid].sample(n=min(lcfg["speech_clipping_accepted"], int(clip_valid.sum())), random_state=seed),
+        eligible.sample(frac=1, random_state=seed).groupby("official_split").head(lcfg["speech_per_split"]),
+    ]).drop_duplicates("utt_id").sort_values("utt_id")
+    rows += [{"manifest": "speech", "id": r["utt_id"], "file": r["audio_path"], "category": r["official_split"],
+              "transcript": r["transcript"], "check": SPEECH_QUESTION} for _, r in picked.iterrows()]
+    return pd.DataFrame(rows).assign(decision="", note="")
+
+
+def build_listening_sheet(cfg: dict) -> pd.DataFrame:
+    """Copy the selected files next to a sheet; reviewers fill `decision` (valid/invalid) and `note`."""
+    import shutil
+
+    out_dir = ensure_dir(project_path(cfg["paths"]["listening_dir"]))
+    sheet = select_for_listening(pd.read_csv(manifest_path(cfg, "speech_manifest.csv"), keep_default_na=False),
+                                 pd.read_csv(manifest_path(cfg, "noise_manifest.csv"), keep_default_na=False), cfg)
+    roots = {"noise": project_path(cfg["paths"]["noise_root"]), "speech": project_path(cfg["paths"]["speech_root"])}
+    for _, r in sheet.iterrows():
+        target = out_dir / r["manifest"] / (str(r["id"]).replace("/", "__") + ".wav")
+        ensure_dir(target.parent)
+        shutil.copyfile(roots[r["manifest"]] / r["file"], target)
+    sheet.to_csv(out_dir / LISTENING_SHEET, index=False)
+    log.info("Listening sheet: %d noise + %d speech files in %s", int((sheet["manifest"] == "noise").sum()),
+             int((sheet["manifest"] == "speech").sum()), out_dir)
+    return sheet
+
+
+def merge_listening_decisions(decisions: pd.DataFrame, sheet: pd.DataFrame) -> pd.DataFrame:
+    """Add filled sheet rows to the manual decisions; a later decision for the same file replaces the earlier one."""
+    filled = sheet[sheet["decision"].astype(str).str.strip() != ""].copy()
+    filled["decision"] = filled["decision"].str.strip().str.lower()
+    bad = set(filled["decision"]) - {"valid", "invalid"}
+    if bad:
+        raise ValueError(f"Decisions must be 'valid' or 'invalid', got {bad}")
+    filled["note"] = "listening: " + filled["note"].astype(str)
+    merged = pd.concat([decisions, filled[["manifest", "id", "decision", "note"]]], ignore_index=True)
+    return merged.drop_duplicates(["manifest", "id"], keep="last").reset_index(drop=True)
+
+
+def apply_listening(cfg: dict) -> None:
+    sheet = pd.read_csv(project_path(cfg["paths"]["listening_dir"]) / LISTENING_SHEET, keep_default_na=False)
+    path = manifest_path(cfg, DECISIONS_FILE)
+    merged = merge_listening_decisions(pd.read_csv(path, keep_default_na=False), sheet)
+    merged.to_csv(path, index=False)
+    log.info("%s now holds %d decisions. Re-run the audit (--target all) to apply them.", path, len(merged))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=None)
-    parser.add_argument("--target", choices=["speech", "noise", "all", "noise-speech"], default="all",
-                        help="noise-speech: screen valid noise files for speech with Wav2Vec2 (needs the model)")
+    parser.add_argument("--target", default="all",
+                        choices=["speech", "noise", "all", "noise-speech", "listening-sheet", "apply-listening"],
+                        help="noise-speech: screen valid noise files for speech with Wav2Vec2 (needs the model); "
+                             "listening-sheet: export files to listen to; apply-listening: add the filled "
+                             "decisions to manual_review_decisions.csv")
     parser.add_argument("--summary-only", action="store_true")
     args = parser.parse_args()
     cfg = load_config(args.config)
-    if args.target == "noise-speech":
-        check_noise_for_speech(cfg)
+    extra = {"noise-speech": check_noise_for_speech, "listening-sheet": build_listening_sheet,
+             "apply-listening": apply_listening}
+    if args.target in extra:
+        extra[args.target](cfg)
         return
     if args.target in ("speech", "all"):
         audit_speech(cfg, summary_only=args.summary_only)
