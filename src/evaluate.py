@@ -116,6 +116,18 @@ def clean_by_noise_category(scored: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     return summarize(clean_rows, ["model", "noise_category"], cfg, with_ci=False)
 
 
+def clean_mismatch_candidates(scored: pd.DataFrame, min_cer: float) -> pd.DataFrame:
+    """Clean utterances whose CER is >= min_cer for every model: likely transcript/audio mismatches.
+
+    One model failing is a model error; all models failing on clean audio points at the data.
+    """
+    clean = scored[scored["condition"] == "clean"].assign(cer=lambda d: d["char_errors"] / d["ref_chars"] * 100)
+    table = clean.pivot_table(index="utt_id", columns="model", values="cer")
+    flagged = table[(table >= min_cer).all(axis=1)]
+    refs = clean.drop_duplicates("utt_id").set_index("utt_id")["reference"]
+    return flagged.add_prefix("clean_cer_").join(refs).reset_index()
+
+
 def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir) -> None:
     import matplotlib
 
@@ -199,6 +211,12 @@ def evaluate(cfg: dict, tag: str) -> None:
     if not by_cat.empty:
         by_cat = add_degradation(by_cat, clean_by_noise_category(scored, cfg), ["model", "noise_category"])
 
+    mismatch = clean_mismatch_candidates(scored, cfg["evaluation"]["mismatch_clean_cer"])
+    if not mismatch.empty:
+        log.warning("%d clean utterances have CER >= %.0f%% for every model (possible transcript/audio "
+                    "mismatch, see clean_mismatch_candidates.csv)", len(mismatch),
+                    cfg["evaluation"]["mismatch_clean_cer"])
+
     rank = by_cond.pivot(index="condition", columns="model", values="wer").rank(axis=1).astype(int)
     rtfx = summarize(scored, ["model"], cfg, with_ci=False)[["model", "audio_sec", "inference_sec", "rtfx"]]
 
@@ -208,6 +226,7 @@ def evaluate(cfg: dict, tag: str) -> None:
     by_cat.to_csv(out_dir / "summary_by_model_noise_category.csv", index=False)
     rank.to_csv(out_dir / "model_rank_by_condition.csv")
     rtfx.to_csv(out_dir / "rtfx.csv", index=False)
+    mismatch.to_csv(out_dir / "clean_mismatch_candidates.csv", index=False)
     runs = {m: str(pred_dir / f"run_{tag}_{m}.json") for m in scored["model"].unique()}
     save_json({"tag": tag, "normalization": cfg.get("text_normalization"), "run_metadata": runs,
                "n_common_rows": len(common)}, out_dir / "evaluation_info.json")

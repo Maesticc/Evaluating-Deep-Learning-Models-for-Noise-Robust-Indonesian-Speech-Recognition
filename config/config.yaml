@@ -31,7 +31,7 @@ datasets:
 
 audio:
   target_sample_rate: 16000
-  convert_to_mono: true          # all three models expect mono input
+  convert_to_mono: true          # all models expect mono input
 
 speech_audit:
   # Set after inspecting the full corpus (2026-11-17): duration median 4.5 s, 99.9% 11.3 s,
@@ -173,3 +173,6 @@ inference:
 evaluation:
   bootstrap_resamples: 1000
   confidence_level: 0.95
+  # Clean utterances with CER at or above this (%) for every model are listed as possible
+  # transcript/audio mismatches in clean_mismatch_candidates.csv (reported, not excluded).
+  mismatch_clean_cer: 30.0

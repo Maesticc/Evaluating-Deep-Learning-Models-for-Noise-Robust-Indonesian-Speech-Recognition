@@ -1,4 +1,4 @@
-"""Load the three ASR systems behind one interface: `transcribe(list[np.ndarray]) -> list[str]`.
+"""Load the ASR systems (custom model, Wav2Vec2, two Whisper checkpoints) behind one interface: `transcribe(list[np.ndarray]) -> list[str]`.
 
 Each pretrained checkpoint uses its own official processor/tokenizer; no shared feature
 extraction is forced across models. MFCCs are not used anywhere in these input paths.

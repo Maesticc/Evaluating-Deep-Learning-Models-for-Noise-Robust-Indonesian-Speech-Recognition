@@ -149,6 +149,7 @@ python -m src.evaluate
 - `output/predictions/results_<tag>/summary_by_model_condition.csv`: WER/CER with 95% bootstrap CI, ΔWER, relative degradation, RTFx
 - `output/predictions/results_<tag>/summary_by_model_noise_category.csv`
 - `output/predictions/results_<tag>/model_rank_by_condition.csv`
+- `output/predictions/results_<tag>/clean_mismatch_candidates.csv`: possible transcript/audio mismatches (reported, not excluded)
 - `output/plots/<tag>/`: WER vs SNR, CER vs SNR, WER degradation, WER heatmap by noise category
 
 ## Results
@@ -166,7 +167,7 @@ Results template. Values are filled in from actual runs only.
 - The speech is prompted/read, and every test sentence also occurs in the training split. The custom model has therefore seen the test sentences (spoken by other speakers), while the pretrained models have not. These results do not measure open-vocabulary or spontaneous-speech performance.
 - The test split has only three human speakers, all male (M4, M8, M12). Results may not transfer to female speakers.
 - The noise conditions are limited to six audited MS-SNSD categories, one of which (VacuumCleaner) has a single recording.
-- Deviation from the plan: noise categories and speech review cases were not checked by listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. An automatic check for speech inside the noise files and for transcript/audio mismatches (high CER on clean audio) is planned for the pilot run.
+- Deviation from the plan: noise categories and speech review cases were not checked by listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. Transcript/audio mismatches are checked automatically: `src.evaluate` lists clean utterances whose CER is at least `evaluation.mismatch_clean_cer` (30 %) for every model in `clean_mismatch_candidates.csv` (pilot: none). An automatic check for speech inside the noise files is still planned.
 - Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. Large-v3 Turbo is evaluated as a replacement; the choice and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
 
 ## References
