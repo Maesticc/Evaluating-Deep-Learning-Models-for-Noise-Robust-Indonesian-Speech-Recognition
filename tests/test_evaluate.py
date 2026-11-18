@@ -29,3 +29,18 @@ def test_clean_mismatch_needs_every_model():
     assert out["utt_id"].tolist() == ["u1"]
     assert out.loc[0, "clean_cer_a"] == 50 and out.loc[0, "reference"] == "r1"
     assert clean_mismatch_candidates(d, 60.0).empty
+
+
+def test_runtime_table_joins_run_metadata(tmp_path):
+    import json
+
+    from src.evaluate import runtime_table
+
+    meta = {"device": "cuda", "batch_size": 8, "peak_gpu_memory_gb": 1.9,
+            "model": {"checkpoint": "openai/whisper-large-v3-turbo", "dtype": "torch.float16"},
+            "environment": {"gpu": "RTX", "torch": "2.11", "transformers": "5.23"}}
+    (tmp_path / "run_t_whisper_turbo.json").write_text(json.dumps(meta))
+    rtfx = pd.DataFrame({"model": ["whisper_turbo", "wav2vec2"], "rtfx": [5.0, 20.0]})
+    t = runtime_table(rtfx, tmp_path, "t").set_index("model")
+    assert t.loc["whisper_turbo", "gpu"] == "RTX" and t.loc["whisper_turbo", "batch_size"] == 8
+    assert pd.isna(t.loc["wav2vec2", "gpu"])  # missing run metadata does not drop the row

@@ -34,6 +34,8 @@ Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/rel
 - `metadata/dataset_metadata_public.csv` is the source of truth for paths, transcripts, speakers and splits. Official splits are never reshuffled.
 - The 132 synthetic repair files (`is_synthetic == True`) are excluded from the primary evaluation (`speech_audit.exclude_synthetic`).
 - Speech-like noise categories (`Babble`, `NeighborSpeaking`, `AirportAnnouncements`) are excluded. In `noise_test` the neighbour recordings are named `Neighbor_*.wav`; they are mapped to `NeighborSpeaking` and excluded too. Ambience categories that may contain background talk (Cafe, Restaurant, Station, ...) stay in `review` and are not used; they only exist in `noise_train`.
+- Music is out of scope (`noise_audit.include_music: false`); the study covers non-speech environmental noise only.
+- Checkpoints were verified on Hugging Face before use: all three accept 16 kHz mono input through their official processor, list Indonesian (`id`) as a supported language, and are openly licensed (`indonesian-nlp/wav2vec2-large-xlsr-indonesian` Apache-2.0, `openai/whisper-large-v3` Apache-2.0, `openai/whisper-large-v3-turbo` MIT).
 - Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment and for the validation development subset (same six categories). No noise file appears in both pools, and test noise is never used for a protocol or checkpoint decision.
 - The corpus is prompted/read speech with a fixed sentence inventory (213 distinct sentences, and every test sentence also appears in the training split); conclusions are limited to this corpus and the selected noise conditions.
 
@@ -148,10 +150,11 @@ python -m src.evaluate --split val --pilot
 # 5. Train the custom model (train split; val for early stopping/checkpoint selection)
 python -m src.train_custom_model
 
-# 6. Freeze config.yaml, then run the full comparison
+# 6. Freeze config.yaml, then run the full comparison with exactly one Whisper checkpoint
+#    (whisper or whisper_turbo, as decided in step 4b)
 python -m src.noise_mixing build-pairs --split test
-python -m src.inference
-python -m src.evaluate
+python -m src.inference --models custom_cnn_bilstm_ctc wav2vec2 whisper_turbo
+python -m src.evaluate --models custom_cnn_bilstm_ctc wav2vec2 whisper_turbo
 ```
 
 ## Experimental protocol
@@ -168,6 +171,14 @@ python -m src.evaluate
 - All models use the same test utterances, noise segments, SNR targets and normalization. `evaluate.py` scores only rows present for every model.
 - The pretrained models are not fine-tuned in the primary experiment. The custom model uses only the training split. The validation split is used for checkpoint selection, and the test set is not used for tuning.
 - Every noisy variant stays in its utterance's official split.
+- Exactly one Whisper checkpoint enters the three-model comparison. It is chosen on a validation development subset (val speech + `noise_train` noise), never on test results.
+
+**Custom CNN-BiLSTM-CTC decisions** (frozen before training; `config.yaml` → `models.custom_cnn_bilstm_ctc`, `src/custom_cnn_bilstm_ctc.py`)
+- Input: 80-bin log-Mel filterbank, 16 kHz, 25 ms window (`n_fft` 400), 10 ms hop, per-utterance normalization.
+- Tokens: character vocabulary built from the normalized training transcripts; index 0 is the CTC blank.
+- Acoustic model: two 3×3 Conv2d layers (32, 32 channels; stride (2, 2) then (2, 1), BatchNorm, GELU; strided convolution instead of pooling, so time is downsampled 2×), dropout 0.2, a linear projection to 256, then a 3-layer BiLSTM (256 hidden per direction), linear output.
+- Padding: packed sequences with per-utterance output lengths. Decoding: CTC greedy.
+- Training: AdamW (lr 5e-4, weight decay 1e-5), one-cycle schedule, batch 16, gradient clipping 5.0, mixed precision, at most 50 epochs, early stopping after 5 epochs without improvement in CER on a fixed-seed 2,000-utterance validation subset.
 
 **Text normalization** (`preprocessing.normalize_text`, used for both references and hypotheses): NFKC, lowercase, `%` → `persen`, digits → Indonesian words (`2018` → `dua ribu delapan belas`), hyphens → spaces, accent stripping, punctuation removal, whitespace collapse. No stemming or lemmatization. Original transcripts are never modified.
 
@@ -177,6 +188,7 @@ python -m src.evaluate
 
 - `output/predictions/predictions_<tag>_<model>.csv`: per-utterance hypotheses and timing
 - `output/predictions/results_<tag>/summary_by_model_condition.csv`: WER/CER with 95% bootstrap CI, ΔWER, relative degradation, RTFx
+- `output/predictions/results_<tag>/rtfx.csv`: RTFx per model with checkpoint, precision, device, GPU, batch size, peak GPU memory and library versions
 - `output/predictions/results_<tag>/summary_by_model_noise_category.csv`
 - `output/predictions/results_<tag>/model_rank_by_condition.csv`
 - `output/predictions/results_<tag>/clean_mismatch_candidates.csv`: possible transcript/audio mismatches (reported, not excluded)

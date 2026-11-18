@@ -10,7 +10,7 @@ The same normalization (src.preprocessing.normalize_text) is applied to referenc
 hypotheses of every model. Confidence intervals: utterance-level bootstrap.
 
 Usage:
-    python -m src.evaluate [--pilot] [--split test]
+    python -m src.evaluate [--pilot] [--split test] [--models custom_cnn_bilstm_ctc wav2vec2 whisper]
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import pandas as pd
 
 from src.model_loader import MODEL_NAMES
 from src.preprocessing import normalize_text
-from src.utils import ensure_dir, get_logger, load_config, project_path, save_json
+from src.utils import ensure_dir, get_logger, load_config, load_json, project_path, save_json
 
 log = get_logger("evaluate")
 CONDITION_ORDER = ["clean", "snr_20dB", "snr_10dB", "snr_5dB", "snr_0dB"]
@@ -128,6 +128,20 @@ def clean_mismatch_candidates(scored: pd.DataFrame, min_cer: float) -> pd.DataFr
     return flagged.add_prefix("clean_cer_").join(refs).reset_index()
 
 
+def runtime_table(rtfx: pd.DataFrame, pred_dir, tag: str) -> pd.DataFrame:
+    """RTFx next to the hardware/runtime configuration recorded by src.inference (run_<tag>_<model>.json)."""
+    rows = []
+    for model in rtfx["model"]:
+        path = pred_dir / f"run_{tag}_{model}.json"
+        meta = load_json(path) if path.exists() else {}
+        env, desc = meta.get("environment", {}), meta.get("model", {})
+        rows.append({"model": model, "checkpoint": desc.get("checkpoint"), "dtype": desc.get("dtype"),
+                     "device": meta.get("device"), "gpu": env.get("gpu"), "batch_size": meta.get("batch_size"),
+                     "peak_gpu_memory_gb": meta.get("peak_gpu_memory_gb"), "torch": env.get("torch"),
+                     "transformers": env.get("transformers")})
+    return rtfx.merge(pd.DataFrame(rows), on="model", how="left")
+
+
 def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir) -> None:
     import matplotlib
 
@@ -179,10 +193,10 @@ def make_plots(by_cond: pd.DataFrame, by_cat: pd.DataFrame, plots_dir) -> None:
         plt.close(fig)
 
 
-def evaluate(cfg: dict, tag: str) -> None:
+def evaluate(cfg: dict, tag: str, models: list[str] | None = None) -> None:
     pred_dir = project_path(cfg["paths"]["predictions_dir"])
     frames = [pd.read_csv(pred_dir / f"predictions_{tag}_{m}.csv", keep_default_na=False)
-              for m in MODEL_NAMES if (pred_dir / f"predictions_{tag}_{m}.csv").exists()]
+              for m in (models or MODEL_NAMES) if (pred_dir / f"predictions_{tag}_{m}.csv").exists()]
     if not frames:
         raise FileNotFoundError(f"No predictions_{tag}_*.csv in {pred_dir}. Run src.inference first.")
     pred = pd.concat(frames, ignore_index=True)
@@ -219,6 +233,7 @@ def evaluate(cfg: dict, tag: str) -> None:
 
     rank = by_cond.pivot(index="condition", columns="model", values="wer").rank(axis=1).astype(int)
     rtfx = summarize(scored, ["model"], cfg, with_ci=False)[["model", "audio_sec", "inference_sec", "rtfx"]]
+    rtfx = runtime_table(rtfx, pred_dir, tag)
 
     out_dir = ensure_dir(pred_dir / f"results_{tag}")
     scored.to_csv(out_dir / "scored_utterances.csv", index=False)
@@ -236,7 +251,7 @@ def evaluate(cfg: dict, tag: str) -> None:
 
     cols = ["model", "condition", "n_utterances", "wer", "cer", "abs_wer_degradation", "rel_wer_degradation"]
     log.info("Results (%s):\n%s", tag, by_cond[cols].round(2).to_string(index=False))
-    log.info("RTFx:\n%s", rtfx.round(2).to_string(index=False))
+    log.info("RTFx:\n%s", rtfx[["model", "rtfx", "gpu", "batch_size", "dtype"]].round(2).to_string(index=False))
     log.info("Tables in %s, plots in %s", out_dir, plots_dir)
 
 
@@ -246,8 +261,11 @@ def main() -> None:
     parser.add_argument("--split", default="test")
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--tag", default=None, help="Override the predictions tag, e.g. test_pilot_limit5")
+    parser.add_argument("--models", nargs="+", default=None, choices=MODEL_NAMES,
+                        help="Models to compare (default: every model with predictions). The primary "
+                             "comparison uses exactly one Whisper checkpoint.")
     args = parser.parse_args()
-    evaluate(load_config(args.config), args.tag or f"{args.split}{'_pilot' if args.pilot else ''}")
+    evaluate(load_config(args.config), args.tag or f"{args.split}{'_pilot' if args.pilot else ''}", args.models)
 
 
 if __name__ == "__main__":
