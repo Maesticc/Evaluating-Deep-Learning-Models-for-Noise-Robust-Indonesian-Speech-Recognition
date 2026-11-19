@@ -55,9 +55,10 @@ Audit run on all 104,500 speech files and 179 noise files (`speech_audit_summary
   - *Duration 1.5–15 s or speaking rate 5–30 characters/s* (26 files): the speaking rate is recomputed over the active-speech span. Between 3 and 30 characters/s the file is accepted (it only had extra silence); otherwise it is excluded (11 files: extra or wrong content, or truncated audio).
 - `audit_flags` lists every automatic flag a file received. `exclusion_reason` is filled only for files that are not valid.
   Decisions in `manual_review_decisions.csv` override the rules.
-- Noise used for evaluation: 31 `noise_test` files in 6 categories (AirConditioner 10, Munching 8, ShuttingDoor 8,
+- Noise used for evaluation: 29 `noise_test` files in 6 categories (AirConditioner 9, Munching 7, ShuttingDoor 8,
   CopyMachine 2, Typing 2, VacuumCleaner 1). Byte-identical noise files are detected: `noise_train/AirConditioner_2` and
-  `noise_train/SqueakyChair_3` are the same recording with different labels, so both are excluded.
+  `noise_train/SqueakyChair_3` are the same recording with different labels, so both are excluded. Two evaluation files
+  flagged by the speech check (see Limitations) are excluded as a precaution.
 
 Raw data are **not** committed. See [`data/README.md`](data/README.md).
 
@@ -191,8 +192,8 @@ Results template. Values are filled in from actual runs only.
 - Deviation from the plan (sections 5, 5.1, 5.2): files were not checked by listening. Automatic checks are used instead:
   - Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above.
   - Transcript/audio mismatches: `src.evaluate` lists clean utterances whose CER is at least 30 % for every model in `clean_mismatch_candidates.csv` (pilot: none).
-  - Speech inside the noise files: Wav2Vec2 transcribes every valid noise file (`--target noise-speech`). Wav2Vec2 also outputs letters for pure noise, so the threshold (4 letters per second) was calibrated on the 57 MS-SNSD files that certainly contain speech: it catches 91 % of them. The speech in those files is English, so counting Indonesian words does not work. Result: 11 of 112 valid noise files are flagged, 2 of them in the evaluation pool (`noise_test/AirConditioner_3`, whose transcript is a repeated-letter pattern typical of noise, and `noise_test/Munching_6`). Flagged files are reported, not excluded; an exclusion goes through `manual_review_decisions.csv`.
-- Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. The full run therefore needs a larger GPU for Large-v3; if none is available, the plan's fallback (a smaller checkpoint, plan 7.3) and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
+  - Speech inside the noise files: Wav2Vec2 transcribes every valid noise file (`--target noise-speech`). Wav2Vec2 also outputs letters for pure noise, so the threshold (4 letters per second) was calibrated on the 57 MS-SNSD files that certainly contain speech: it catches 91 % of them. The speech in those files is English, so counting Indonesian words does not work. Result: 11 of 112 valid noise files are flagged, 2 of them in the evaluation pool (`noise_test/AirConditioner_3` and `noise_test/Munching_6`). Rule: every flagged evaluation file is excluded as a precaution (recorded in `manual_review_decisions.csv`), leaving 29 evaluation noise files. Flagged `noise_train` files are only reported; that pool is not used in the primary experiment.
+- Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.39 GB) and runs at about real time (pilot RTFx 1.08, 0.85 in an earlier run), about 88-111 GPU-hours for the full test set. The full run therefore needs a larger GPU for Large-v3; if none is available, the plan's fallback (a smaller checkpoint, plan 7.3) and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
 
 ## References
 

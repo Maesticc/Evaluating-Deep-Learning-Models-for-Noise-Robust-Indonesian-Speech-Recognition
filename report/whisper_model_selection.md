@@ -10,12 +10,13 @@ The pilot (30 test utterances x 5 conditions = 150 rows, RTX 3050 Laptop 4 GB) r
 
 | Model | WER clean | WER 0 dB | RTFx | Peak GPU memory |
 |---|---|---|---|---|
-| Whisper large-v3 | 6.35 % | 21.40 % | 0.85 | 3.36 GB of 4.29 GB |
-| Wav2Vec2 XLSR Indonesian | 30.10 % | 61.87 % | 22.28 | - |
+| Whisper large-v3 | 6.35 % | 21.74 % | 1.08 | 3.39 GB of 4.29 GB |
+| Wav2Vec2 XLSR Indonesian | 30.10 % | 59.87 % | 22.64 | 2.69 GB of 4.29 GB |
 
 Accuracy is not the problem on this laptop; throughput is. The full test set is 15,673 eligible utterances x 5
-conditions = 78,365 rows. At the pilot's mean duration (4.76 s) that is about 104 h of audio, so
-large-v3 at RTFx 0.85 needs roughly **121 GPU-hours** on this laptop (Wav2Vec2: about 5 h).
+conditions = 78,365 rows, 94.7 h of audio (manifest durations), so large-v3 at RTFx 1.08 needs roughly
+**88 GPU-hours** on this laptop (Wav2Vec2: about 4 h). RTFx depends on other load on the laptop: an earlier
+pilot run measured 0.85 for large-v3 (about 111 h), so timings are taken with no other GPU-heavy apps open.
 Batch 4 does not fit in 4 GB (4.14 GB, spills into shared memory, 2-3x slower).
 
 ## Candidates if Large-v3 cannot be run
