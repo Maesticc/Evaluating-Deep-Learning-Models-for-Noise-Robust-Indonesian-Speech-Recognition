@@ -63,12 +63,17 @@ class LogMelFeatures(nn.Module):
             feats = torch.log(self.mel(wave.float()) + self.log_offset)
         frame_lengths = lengths // self.hop_length + 1
         if self.per_utterance_norm:
-            mask = (torch.arange(feats.size(-1), device=feats.device)[None, :] < frame_lengths[:, None])
-            mask = mask[:, None, :].float()
-            n = mask.sum(dim=-1, keepdim=True).clamp(min=1)
-            mean = (feats * mask).sum(dim=-1, keepdim=True) / n
-            var = (((feats - mean) * mask) ** 2).sum(dim=-1, keepdim=True) / n
-            feats = (feats - mean) / torch.sqrt(var + 1e-5) * mask
+            # Normalize each utterance separately: every Mel bin gets mean 0 and variance 1.
+            # Only the real frames are used; the zero padding added to batch shorter utterances
+            # is ignored and stays 0.
+            normalized = torch.zeros_like(feats)
+            for i in range(feats.size(0)):
+                n_frames = int(frame_lengths[i])
+                real = feats[i, :, :n_frames]                      # (n_mels, n_frames)
+                mean = real.mean(dim=-1, keepdim=True)
+                var = ((real - mean) ** 2).mean(dim=-1, keepdim=True)
+                normalized[i, :, :n_frames] = (real - mean) / torch.sqrt(var + 1e-5)
+            feats = normalized
         return feats, frame_lengths
 
 

@@ -53,11 +53,21 @@ def score_predictions(pred: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
 
 def bootstrap_ci(err: np.ndarray, n: np.ndarray, resamples: int, level: float, seed: int) -> tuple[float, float]:
+    """Confidence interval of an error rate (WER or CER) by bootstrap resampling.
+
+    err[i] = errors in utterance i, n[i] = reference words (or characters) in utterance i.
+    Each resample draws len(err) utterances at random *with replacement* and recomputes the rate.
+    The interval is the middle `level` (e.g. 95 %) of the resampled rates.
+    """
     rng = np.random.default_rng(seed)
-    idx = rng.integers(0, len(err), size=(resamples, len(err)))
-    rates = err[idx].sum(axis=1) / n[idx].sum(axis=1) * 100
-    lo, hi = np.percentile(rates, [(1 - level) / 2 * 100, (1 + level) / 2 * 100])
-    return float(lo), float(hi)
+    # every row of `picks` is one resample: a list of utterance indices drawn with replacement
+    picks = rng.integers(0, len(err), size=(resamples, len(err)))
+    rates = []
+    for chosen in picks:
+        rates.append(err[chosen].sum() / n[chosen].sum() * 100)
+    lower_pct = (1 - level) / 2 * 100   # e.g. 2.5 for a 95 % interval
+    upper_pct = (1 + level) / 2 * 100   # e.g. 97.5
+    return float(np.percentile(rates, lower_pct)), float(np.percentile(rates, upper_pct))
 
 
 def summarize(scored: pd.DataFrame, keys: list[str], cfg: dict, with_ci: bool = True) -> pd.DataFrame:

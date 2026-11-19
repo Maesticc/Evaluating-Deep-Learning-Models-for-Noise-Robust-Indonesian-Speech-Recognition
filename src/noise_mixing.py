@@ -34,17 +34,28 @@ EPS = 1e-12
 # --------------------------------------------------------------------------- power / SNR
 def active_speech_mask(audio: np.ndarray, sr: int, frame_ms: float, hop_ms: float,
                        threshold_db: float) -> np.ndarray:
-    """Sample-level boolean mask of frames whose energy is within threshold_db of the max frame."""
-    frame, hop = int(sr * frame_ms / 1000), int(sr * hop_ms / 1000)
-    if audio.size < frame:
-        return np.ones_like(audio, dtype=bool)
-    n_frames = 1 + (audio.size - frame) // hop
-    idx = np.arange(frame)[None, :] + hop * np.arange(n_frames)[:, None]
-    energy_db = 10 * np.log10(np.mean(audio[idx].astype(np.float64) ** 2, axis=1) + EPS)
-    active = energy_db >= energy_db.max() - threshold_db
-    mask = np.zeros(audio.size, dtype=bool)
-    for i in np.flatnonzero(active):
-        mask[i * hop: i * hop + frame] = True
+    """Mark which samples belong to active speech (True) and which to silence (False).
+
+    1. Cut the audio into short frames (25 ms, a new frame every 10 ms).
+    2. Measure the energy of each frame in dB.
+    3. A frame is speech if it is at most `threshold_db` quieter than the loudest frame.
+    """
+    frame_len = int(sr * frame_ms / 1000)
+    hop_len = int(sr * hop_ms / 1000)
+    if len(audio) < frame_len:
+        return np.ones(len(audio), dtype=bool)
+
+    frame_starts = range(0, len(audio) - frame_len + 1, hop_len)
+    energies_db = []
+    for start in frame_starts:
+        frame = audio[start:start + frame_len].astype(np.float64)
+        energies_db.append(10 * np.log10(np.mean(frame ** 2) + EPS))
+
+    loudest_db = max(energies_db)
+    mask = np.zeros(len(audio), dtype=bool)
+    for start, energy_db in zip(frame_starts, energies_db):
+        if energy_db >= loudest_db - threshold_db:
+            mask[start:start + frame_len] = True
     return mask
 
 
