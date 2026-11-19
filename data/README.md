@@ -25,6 +25,7 @@ Raw datasets, extracted audio and generated noisy audio are **not** committed to
 | `speech_manifest.csv` | The raw manifest plus audit statistics, `quality_status` (valid/review/invalid), `audit_flags` (every automatic flag), `auto_review` (rule decision with measured values), `exclusion_reason` (only for files that are not valid), `eligible_primary` |
 | `noise_manifest.csv` | noise_path, noise_category, duration_sec, sample_rate, quality_status, audit_flags, exclusion_reason, `content_md5` / `duplicate_of` (byte-identical files), provenance_note |
 | `manual_review_decisions.csv` | Manual overrides of the audit: `manifest,id,decision,note` |
+| `noise_speech_check.csv` | Valid noise files screened for speech with Wav2Vec2: transcript, letters per second, `speech_suspected` |
 | `conditions_<split>[_pilot].csv` | Utterance-noise pairing per condition: noise file, offset, seed, target/achieved SNR, per-utterance output gain, clipping flags |
 | `speech_audit_summary.json` | Duration/RMS distribution, status counts, auto-review counts, flags raised, exclusion reasons |
 

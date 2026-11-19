@@ -61,31 +61,6 @@ Audit run on all 104,500 speech files and 179 noise files (`speech_audit_summary
 
 Raw data are **not** committed. See [`data/README.md`](data/README.md).
 
-## Setup
-
-```bash
-python -m venv .venv && .venv\Scripts\activate          # Windows (source .venv/bin/activate elsewhere)
-# Install PyTorch for your CUDA version first: https://pytorch.org/get-started/locally/
-pip install -r requirements.txt
-python -m pytest -q tests                                  # unit tests, no data or GPU needed
-```
-
-Tested environment of the pilot runs (also written to `output/predictions/run_*.json`):
-
-| Component | Version |
-|---|---|
-| OS / CPU | Windows 11, AMD64 (AMD Family 25) |
-| GPU | NVIDIA GeForce RTX 3050 Laptop, 4.29 GB, CUDA 12.6 |
-| Python | 3.12.16 |
-| torch / torchaudio | 2.11.0+cu126 / 2.11.0+cu126 |
-| transformers | 5.23.0 |
-| numpy / pandas | 2.5.5 / 3.1.1 |
-| librosa / soundfile | 1.0.1 / 0.14.0 |
-| jiwer | not recorded in the pilot (fixed: versions now come from package metadata) |
-
-`requirements.txt` holds minimum versions. Exact pins (`pip freeze > requirements-lock.txt`) are made on the
-machine that runs the full evaluation, once that environment is confirmed.
-
 ## Repository structure
 
 ```
@@ -102,7 +77,7 @@ src/
   audio_validation.py       # integrity, duration, silence/RMS, clipping, valid/review/invalid
   preprocessing.py          # audio standardization, deterministic text normalization
   noise_mixing.py           # noise selection, SNR mixing, achieved-SNR verification
-  model_loader.py           # all models (incl. two Whisper checkpoints) behind one transcribe() interface
+  model_loader.py           # the three models behind one transcribe() interface
   custom_cnn_bilstm_ctc.py  # custom model architecture
   train_custom_model.py     # training on the official train split (val for selection)
   inference.py              # predictions, runtime and configuration per model
@@ -120,6 +95,9 @@ report/
 Run all commands from the repository root.
 
 ```bash
+# 0. Unit tests (no data or GPU needed)
+python -m pytest -q tests
+
 # 1. Download data
 python -m src.data_loader download-speech                      # all categories (~134 h of audio)
 #    or: python -m src.data_loader download-speech --categories Declarative   (quick start)
@@ -132,11 +110,6 @@ python -m src.data_loader build-manifests
 python -m src.audio_validation --target speech --summary-only
 python -m src.audio_validation --target all                    # ~13 min for the full corpus
 python -m src.audio_validation --target noise-speech           # screen valid noise files for speech (Wav2Vec2)
-#    Manual listening (plan 5): export the files to listen to, fill decision (valid/invalid) and note in
-#    data/processed/listening/listening_sheet.csv, apply, then re-run the audit and commit the filled sheet.
-python -m src.audio_validation --target listening-sheet
-python -m src.audio_validation --target apply-listening
-python -m src.audio_validation --target all
 #    "review" speech files are resolved by speech_audit.auto_review. To override a decision, add a row to
 #    data/processed/manifests/manual_review_decisions.csv  (manifest,id,decision,note) and re-run the audit.
 
@@ -193,8 +166,7 @@ python -m src.evaluate
 - `output/predictions/results_<tag>/summary_by_model_condition.csv`: WER/CER with 95% bootstrap CI, ΔWER, relative degradation, RTFx
 - `output/predictions/results_<tag>/rtfx.csv`: RTFx per model with checkpoint, precision, device, GPU, batch size, peak GPU memory and library versions
 - `output/predictions/results_<tag>/accuracy_vs_speed.csv` and `output/plots/<tag>/accuracy_vs_speed.png`: WER per condition against RTFx (accuracy-versus-speed trade-off)
-- `data/processed/manifests/noise_speech_check.csv`: noise files screened for speech (transcribed characters per second)
-- `data/processed/listening/listening_sheet.csv`: files selected for manual listening with the reviewers' decisions (the copied WAVs are not committed)
+- `data/processed/manifests/noise_speech_check.csv`: valid noise files screened for speech (letters per second that Wav2Vec2 transcribes; flagged at 4 or more)
 - `output/predictions/results_<tag>/summary_by_model_noise_category.csv`
 - `output/predictions/results_<tag>/model_rank_by_condition.csv`
 - `output/predictions/results_<tag>/clean_mismatch_candidates.csv`: possible transcript/audio mismatches (reported, not excluded)
@@ -216,7 +188,10 @@ Results template. Values are filled in from actual runs only.
 - The speech is prompted/read, and every test sentence also occurs in the training split. The custom model has therefore seen the test sentences (spoken by other speakers), while the pretrained models have not. These results do not measure open-vocabulary or spontaneous-speech performance.
 - The test split has only three human speakers, all male (M4, M8, M12). Results may not transfer to female speakers.
 - The noise conditions are limited to six audited MS-SNSD categories, one of which (VacuumCleaner) has a single recording.
-- Listening (plan 5): until the listening sheet is filled, noise categories and speech review cases are resolved without listening. Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above. `--target listening-sheet` exports every evaluation noise file, 2 `noise_train` files per evaluation category, every rule-resolved duration/speaking-rate case and rejected clipping case, 10 accepted clipping cases and 10 eligible utterances per split; the decisions recorded there override the rules. If the sheet is not filled before the full run, this remains a deviation from the plan and is reported as such. Transcript/audio mismatches are checked automatically: `src.evaluate` lists clean utterances whose CER is at least `evaluation.mismatch_clean_cer` (30 %) for every model in `clean_mismatch_candidates.csv` (pilot: none). Speech inside the noise files is screened automatically with Wav2Vec2 (`python -m src.audio_validation --target noise-speech`, report in `noise_speech_check.csv`); suspected files are reviewed and excluded through `manual_review_decisions.csv`.
+- Deviation from the plan (sections 5, 5.1, 5.2): files were not checked by listening. Automatic checks are used instead:
+  - Speech-like noise is excluded by category, and speech review cases are resolved by the documented rules above.
+  - Transcript/audio mismatches: `src.evaluate` lists clean utterances whose CER is at least 30 % for every model in `clean_mismatch_candidates.csv` (pilot: none).
+  - Speech inside the noise files: Wav2Vec2 transcribes every valid noise file (`--target noise-speech`). Wav2Vec2 also outputs letters for pure noise, so the threshold (4 letters per second) was calibrated on the 57 MS-SNSD files that certainly contain speech: it catches 91 % of them. The speech in those files is English, so counting Indonesian words does not work. Result: 11 of 112 valid noise files are flagged, 2 of them in the evaluation pool (`noise_test/AirConditioner_3`, whose transcript is a repeated-letter pattern typical of noise, and `noise_test/Munching_6`). Flagged files are reported, not excluded; an exclusion goes through `manual_review_decisions.csv`.
 - Whisper Large-v3 fits on the 4 GB RTX 3050 only at batch size 1 (peak 3.36 GB) and runs slower than real time (pilot RTFx 0.85), about 121 GPU-hours for the full test set. The full run therefore needs a larger GPU for Large-v3; if none is available, the plan's fallback (a smaller checkpoint, plan 7.3) and its justification are recorded in [`report/whisper_model_selection.md`](report/whisper_model_selection.md).
 
 ## References
