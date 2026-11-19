@@ -37,12 +37,13 @@ def test_runtime_table_joins_run_metadata(tmp_path):
     from src.evaluate import runtime_table
 
     meta = {"device": "cuda", "batch_size": 8, "peak_gpu_memory_gb": 1.9,
-            "model": {"checkpoint": "openai/whisper-large-v3", "dtype": "torch.float16"},
+            "model": {"checkpoint": "openai/whisper-large-v3", "revision": "abc123", "dtype": "torch.float16"},
             "environment": {"gpu": "RTX", "torch": "2.11", "transformers": "5.23"}}
     (tmp_path / "run_t_whisper.json").write_text(json.dumps(meta))
     rtfx = pd.DataFrame({"model": ["whisper", "wav2vec2"], "rtfx": [5.0, 20.0]})
     t = runtime_table(rtfx, tmp_path, "t").set_index("model")
     assert t.loc["whisper", "gpu"] == "RTX" and t.loc["whisper", "batch_size"] == 8
+    assert t.loc["whisper", "revision"] == "abc123"
     assert pd.isna(t.loc["wav2vec2", "gpu"])  # missing run metadata does not drop the row
 
 

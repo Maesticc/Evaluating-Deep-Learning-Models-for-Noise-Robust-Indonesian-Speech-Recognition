@@ -145,7 +145,8 @@ def runtime_table(rtfx: pd.DataFrame, pred_dir, tag: str) -> pd.DataFrame:
         path = pred_dir / f"run_{tag}_{model}.json"
         meta = load_json(path) if path.exists() else {}
         env, desc = meta.get("environment", {}), meta.get("model", {})
-        rows.append({"model": model, "checkpoint": desc.get("checkpoint"), "dtype": desc.get("dtype"),
+        rows.append({"model": model, "checkpoint": desc.get("checkpoint"), "revision": desc.get("revision"),
+                     "dtype": desc.get("dtype"),
                      "device": meta.get("device"), "gpu": env.get("gpu"), "batch_size": meta.get("batch_size"),
                      "peak_gpu_memory_gb": meta.get("peak_gpu_memory_gb"), "torch": env.get("torch"),
                      "transformers": env.get("transformers")})

@@ -10,6 +10,14 @@ def test_models_match_the_plan():
     assert (w["checkpoint"], w["language"], w["task"]) == ("openai/whisper-large-v3", "indonesian", "transcribe")
 
 
+def test_pretrained_checkpoints_are_pinned():
+    """Plan 7.2/7.3: the exact checkpoint is fixed by a full 40-character Hugging Face commit hash."""
+    models = load_config(None)["models"]
+    for name in ("wav2vec2", "whisper"):
+        rev = str(models[name].get("revision"))
+        assert len(rev) == 40 and all(c in "0123456789abcdef" for c in rev), name
+
+
 def test_environment_info_records_every_package_version():
     from src.utils import environment_info
 

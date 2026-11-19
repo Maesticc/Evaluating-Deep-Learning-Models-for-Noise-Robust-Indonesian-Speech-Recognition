@@ -144,13 +144,17 @@ models:
     checkpoint: output/models/custom_cnn_bilstm_ctc/best.pt
     batch_size: 16               # inference batch size
 
+  # revision = exact Hugging Face commit of the checkpoint (plan 7.2/7.3: verify the exact checkpoint).
+  # Pinned so that the full run uses the same model version as the pilot even if the repository changes.
   wav2vec2:
     checkpoint: indonesian-nlp/wav2vec2-large-xlsr-indonesian
+    revision: 68fbcbd947e32184a704b401b71973d6c27de0c1
     batch_size: 8
     fp16: false
 
   whisper:
     checkpoint: openai/whisper-large-v3
+    revision: 06f233fe06e710322aca913c1bc4249a0d71fce1
     language: indonesian
     task: transcribe
     num_beams: 1
@@ -160,7 +164,7 @@ models:
     batch_size: 1
     fp16: true                   # only applied on CUDA
     # Plan v5 section 7.3: if the hardware cannot run Large-v3, set checkpoint to
-    # openai/whisper-large-v3-turbo (same settings) and record the change in
+    # openai/whisper-large-v3-turbo (same settings, with that repository's own revision) and record the change in
     # report/whisper_model_selection.md and the README.
 
 inference:

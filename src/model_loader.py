@@ -59,8 +59,10 @@ class Wav2Vec2Model(ASRModel):
         self.mcfg = cfg["models"][self.name]
         self.device = device
         self.dtype = torch.float16 if (self.mcfg.get("fp16") and device == "cuda") else torch.float32
-        self.processor = Wav2Vec2Processor.from_pretrained(self.mcfg["checkpoint"])
-        self.model = Wav2Vec2ForCTC.from_pretrained(self.mcfg["checkpoint"], torch_dtype=self.dtype).to(device).eval()
+        self.revision = self.mcfg.get("revision")  # exact Hugging Face commit (None = latest)
+        self.processor = Wav2Vec2Processor.from_pretrained(self.mcfg["checkpoint"], revision=self.revision)
+        self.model = Wav2Vec2ForCTC.from_pretrained(self.mcfg["checkpoint"], revision=self.revision,
+                                                    torch_dtype=self.dtype).to(device).eval()
         self.sample_rate = self.processor.feature_extractor.sampling_rate
 
     @torch.no_grad()
@@ -73,8 +75,8 @@ class Wav2Vec2Model(ASRModel):
         return self.processor.batch_decode(logits.argmax(dim=-1))
 
     def describe(self):
-        return {"name": self.name, "checkpoint": self.mcfg["checkpoint"], "decoding": "ctc_greedy",
-                "dtype": str(self.dtype), "sample_rate": self.sample_rate,
+        return {"name": self.name, "checkpoint": self.mcfg["checkpoint"], "revision": self.revision,
+                "decoding": "ctc_greedy", "dtype": str(self.dtype), "sample_rate": self.sample_rate,
                 "return_attention_mask": self.processor.feature_extractor.return_attention_mask}
 
 
@@ -87,9 +89,10 @@ class WhisperModel(ASRModel):
         self.mcfg = cfg["models"][self.name]
         self.device = device
         self.dtype = torch.float16 if (self.mcfg.get("fp16") and device == "cuda") else torch.float32
-        self.processor = WhisperProcessor.from_pretrained(self.mcfg["checkpoint"])
+        self.revision = self.mcfg.get("revision")  # exact Hugging Face commit (None = latest)
+        self.processor = WhisperProcessor.from_pretrained(self.mcfg["checkpoint"], revision=self.revision)
         self.model = WhisperForConditionalGeneration.from_pretrained(
-            self.mcfg["checkpoint"], torch_dtype=self.dtype).to(device).eval()
+            self.mcfg["checkpoint"], revision=self.revision, torch_dtype=self.dtype).to(device).eval()
         self.sample_rate = self.processor.feature_extractor.sampling_rate
         self.gen_kwargs = {"language": self.mcfg["language"], "task": self.mcfg["task"],
                            "num_beams": self.mcfg["num_beams"], "max_new_tokens": self.mcfg["max_new_tokens"]}
@@ -117,8 +120,8 @@ class WhisperModel(ASRModel):
         return [t.strip() for t in out]
 
     def describe(self):
-        return {"name": self.name, "checkpoint": self.mcfg["checkpoint"], "dtype": str(self.dtype),
-                "generation": self.gen_kwargs, "sample_rate": self.sample_rate,
+        return {"name": self.name, "checkpoint": self.mcfg["checkpoint"], "revision": self.revision,
+                "dtype": str(self.dtype), "generation": self.gen_kwargs, "sample_rate": self.sample_rate,
                 "long_form": f"sequential with timestamps for audio > {WHISPER_MAX_SEC:.0f} s"}
 
 
