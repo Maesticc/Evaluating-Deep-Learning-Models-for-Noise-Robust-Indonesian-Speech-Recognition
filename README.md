@@ -34,7 +34,7 @@ Conditions: **Clean, 20 dB, 10 dB, 5 dB, 0 dB**. Metrics: WER, CER, absolute/rel
 - The 132 synthetic repair files (`is_synthetic == True`) are excluded from the primary evaluation (`speech_audit.exclude_synthetic`).
 - Speech-like noise categories (`Babble`, `NeighborSpeaking`, `AirportAnnouncements`) are excluded. In `noise_test` the neighbour recordings are named `Neighbor_*.wav`; they are mapped to `NeighborSpeaking` and excluded too. Ambience categories that may contain background talk (Cafe, Restaurant, Station, ...) stay in `review` and are not used; they only exist in `noise_train`.
 - Music is out of scope (`noise_audit.include_music: false`); the study covers non-speech environmental noise only.
-- Checkpoints were verified on Hugging Face before use: both accept 16 kHz mono input through their official processor, list Indonesian (`id`) as a supported language, and are openly licensed (`indonesian-nlp/wav2vec2-large-xlsr-indonesian` Apache-2.0, `openai/whisper-large-v3` Apache-2.0; the documented fallback `openai/whisper-large-v3-turbo` is MIT).
+- Checkpoints were verified on Hugging Face before use: both accept 16 kHz mono input through their official processor, list Indonesian (`id`) as a supported language, and are openly licensed (`indonesian-nlp/wav2vec2-large-xlsr-indonesian` Apache-2.0, `openai/whisper-large-v3` Apache-2.0; the documented fallback `openai/whisper-large-v3-turbo` is MIT). The exact versions are pinned by their Hugging Face commit in `config.yaml` (Wav2Vec2 `68fbcbd`, Whisper Large-v3 `06f233f`, the versions used in the pilot) and written to every `run_*.json`.
 - Evaluation uses the `noise_test` pool. `noise_train` is reserved for the optional noise-augmentation experiment and for the validation development subset (same six categories). No noise file appears in both pools, and test noise is never used for a protocol or checkpoint decision.
 - The corpus is prompted/read speech with a fixed sentence inventory (213 distinct sentences, and every test sentence also appears in the training split); conclusions are limited to this corpus and the selected noise conditions.
 
@@ -124,6 +124,7 @@ python -m src.evaluate --pilot --models wav2vec2 whisper
 
 # 5. Train the custom model (train split; val for early stopping/checkpoint selection)
 python -m src.train_custom_model
+#    if training is interrupted, run the same command with --resume (continues after the last finished epoch)
 #    then complete the pilot with all three systems on the same inputs (plan 11.5)
 python -m src.inference --pilot --models custom_cnn_bilstm_ctc
 python -m src.evaluate --pilot --models custom_cnn_bilstm_ctc wav2vec2 whisper
@@ -156,6 +157,7 @@ python -m src.evaluate
 - Acoustic model: two 3×3 Conv2d layers (32, 32 channels; stride (2, 2) then (2, 1), BatchNorm, GELU; strided convolution instead of pooling, so time is downsampled 2×), dropout 0.2, a linear projection to 256, then a 3-layer BiLSTM (256 hidden per direction), linear output.
 - Padding: packed sequences with per-utterance output lengths. Decoding: CTC greedy.
 - Training: AdamW (lr 5e-4, weight decay 1e-5), one-cycle schedule, batch 16, gradient clipping 5.0, mixed precision, at most 50 epochs, early stopping after 5 epochs without improvement in CER on a fixed-seed 2,000-utterance validation subset.
+- Training data are shuffled with seed 42 + epoch number. After every epoch the full training state (model, optimizer, learning-rate schedule, early-stopping counter) is saved to `last.pt`, so an interrupted run continues with `--resume` on the same data order and schedule. A resumed run was checked against an uninterrupted one: the losses agree to the fourth decimal place (GPU arithmetic is not bit-exact).
 
 **Text normalization** (`preprocessing.normalize_text`, used for both references and hypotheses): NFKC, lowercase, `%` → `persen`, digits → Indonesian words (`2018` → `dua ribu delapan belas`), hyphens → spaces, accent stripping, punctuation removal, whitespace collapse. No stemming or lemmatization. Original transcripts are never modified.
 
@@ -165,7 +167,7 @@ python -m src.evaluate
 
 - `output/predictions/predictions_<tag>_<model>.csv`: per-utterance hypotheses and timing
 - `output/predictions/results_<tag>/summary_by_model_condition.csv`: WER/CER with 95% bootstrap CI, ΔWER, relative degradation, RTFx
-- `output/predictions/results_<tag>/rtfx.csv`: RTFx per model with checkpoint, precision, device, GPU, batch size, peak GPU memory and library versions
+- `output/predictions/results_<tag>/rtfx.csv`: RTFx per model with checkpoint and revision, precision, device, GPU, batch size, peak GPU memory and library versions
 - `output/predictions/results_<tag>/accuracy_vs_speed.csv` and `output/plots/<tag>/accuracy_vs_speed.png`: WER per condition against RTFx (accuracy-versus-speed trade-off)
 - `data/processed/manifests/noise_speech_check.csv`: valid noise files screened for speech (letters per second that Wav2Vec2 transcribes; flagged at 4 or more)
 - `output/predictions/results_<tag>/summary_by_model_noise_category.csv`
