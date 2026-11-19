@@ -71,7 +71,8 @@ noise_audit:
   review_categories: [Cafe, CafeTeria, Restaurant, Station, Metro, Square, Office, Hallway]
   include_music: false
   # Speech screening (python -m src.audio_validation --target noise-speech): a valid noise file whose
-  # Wav2Vec2 transcript reaches this many characters per second is reported for review (not excluded).
+  # Wav2Vec2 transcript reaches this many characters per second is reported in noise_speech_check.csv.
+  # Flagged evaluation (noise_test) files are excluded through manual_review_decisions.csv.
   # Wav2Vec2 also outputs letters for pure noise, so the threshold was calibrated on the 57 MS-SNSD files
   # that certainly contain speech (Babble, NeighborSpeaking, AirportAnnouncements): at 4 chars/s it
   # catches 91 % of them and flags 13 of 122 other noise files (2 of the 31 evaluation files).
